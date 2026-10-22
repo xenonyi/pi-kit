@@ -47,33 +47,40 @@ export default function hashlineEdit(pi: ExtensionAPI) {
 		},
 	});
 
+	const spliceProperties = {
+		anchor: Type.String({ pattern: "^(BOF|EOF|[1-9][0-9]*#[0-9a-fA-F]{4})$", description: "Copy LINE#HHHH, e.g. 12#A83F, without :content, from the original revision. Use BOF/EOF for start/end insertion, including empty files." }),
+		deleteCount: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Count of original lines to remove starting at the anchor, not an ending line number. 0 inserts before it; BOF/EOF require 0." }),
+		lines: Type.Array(Type.String(), { description: "One literal string per line, preserving indentation. No embedded CR/LF or copied hashline prefixes; [] inserts nothing." }),
+	};
 	pi.registerTool({
 		name: "hash_edit",
 		label: "hash_edit",
 		description:
-			"Apply one revision-checked line splice to an existing UTF-8 file. Replace/delete from LINE#HHHH, insert before it, or insert at BOF/EOF. " +
+			"Apply revision-checked line splices atomically to one existing UTF-8 file. Provide a non-empty edits[] array, including for a single edit. " +
+			"All anchors and ranges refer to the same original revision; input order does not matter. Replace/delete from LINE#HHHH, insert before it, or insert at BOF/EOF. " +
 			"Requires the complete current sha256: revision copied from hash_read or a successful hash_edit result. " +
-			"Preserves BOM and newline convention; returns a new revision and up to 20 current hashline rows. " +
-			"Rejects stale revisions, mismatched anchors and invalid ranges without fuzzy matching.",
-		promptSnippet: "Preferred editor for supported text: revision-checked line insert/replace/delete",
+			"Rejects stale revisions, mismatched anchors, invalid ranges, overlaps and equal start positions before writing, without fuzzy matching. " +
+			"Preserves BOM and newline convention; returns only the final revision, edit/line totals and up to 20 current hashline rows near the earliest edit.",
+		promptSnippet: "Preferred editor for supported text: revision-checked atomic single-file line edits",
 		promptGuidelines: [
 			"Prefer hash_edit over edit or shell-based edits for supported existing UTF-8 text files. Use write only for new files or complete rewrites.",
-			"Run edits to the same file sequentially. After a change, discard the old revision and anchors; use the new revision and preview anchors, or hash_read the next target if needed.",
+			"When editing multiple locations in one file, use one edits[] batch. Copy every anchor from the same original revision; do not adjust later line numbers for earlier edits.",
+			"Do not include overlapping deletions, insertion points inside deletions, or edits with the same start position (including BOF and line 1). Adjacent non-overlapping edits are allowed.",
+			"Run separate hash_edit calls to the same file sequentially. After a change, discard old revisions and anchors; use the new revision and preview anchors, or hash_read for ranges not shown in the preview.",
 			"On STALE_FILE or ANCHOR_MISMATCH, use hash_read and rebuild the edit from current contents; do not retry unchanged input or bypass validation with another editing tool.",
 		],
 		parameters: Type.Object({
 			path: Path,
-			revision: Type.String({ pattern: "^sha256:[0-9a-f]{64}$", description: "Complete current sha256: revision, copied verbatim from hash_read or the latest successful hash_edit for this file." }),
-			anchor: Type.String({ pattern: "^(BOF|EOF|[1-9][0-9]*#[0-9a-fA-F]{4})$", description: "Copy LINE#HHHH, e.g. 12#A83F, without :content. Use BOF/EOF for start/end insertion, including empty files." }),
-			deleteCount: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Count of lines to remove starting at the anchor, not an ending line number. 0 inserts before it; BOF/EOF require 0." }),
-			lines: Type.Array(Type.String(), { description: "One literal string per line, preserving indentation. No embedded CR/LF or copied hashline prefixes; [] inserts nothing." }),
-		}),
+			revision: Type.String({ pattern: "^sha256:[0-9a-f]{64}$", description: "Complete current sha256: revision for all edits, copied verbatim from hash_read or the latest successful hash_edit for this file." }),
+			edits: Type.Array(Type.Object(spliceProperties), { minItems: 1, description: "Atomic single-file batch; use one entry for a single edit. Every edit uses the original revision's anchors and ranges, in any order. Any invalid or conflicting edit rejects the entire batch without writing." }),
+		}, { additionalProperties: false, description: "Requires path, revision and non-empty edits[]." }),
 		outputSchema: Type.Object({
 			...ViewProperties,
 			changed: Type.Boolean(),
-			firstChangedLine: Type.Integer(),
-			deletedLines: Type.Integer(),
-			insertedLines: Type.Integer(),
+			firstChangedLine: Type.Integer({ description: "Earliest splice start in the original snapshot (1-based). The final preview offset is clamped to the resulting file." }),
+			editCount: Type.Integer({ minimum: 1, description: "Number of validated entries in edits[]." }),
+			deletedLines: Type.Integer({ description: "Sum of requested deleteCount values, including unchanged replacements." }),
+			insertedLines: Type.Integer({ description: "Sum of supplied lines lengths, including unchanged replacements." }),
 		}),
 		annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
 
@@ -86,10 +93,12 @@ export default function hashlineEdit(pi: ExtensionAPI) {
 				...formatRead(result.document, result.revision, { offset, limit: 20 }),
 				changed: result.changed,
 				firstChangedLine: result.firstChangedLine,
-				deletedLines: params.deleteCount,
-				insertedLines: params.lines.length,
+				editCount: result.editCount,
+				deletedLines: result.deletedLines,
+				insertedLines: result.insertedLines,
 			};
-			const text = `${result.changed ? "Edited" : "Unchanged"}: ${params.path}\n${view.text}`;
+			const text = `${result.changed ? "Edited" : "Unchanged"}: ${params.path}\n` +
+				`Edits: ${view.editCount}; deleted lines: ${view.deletedLines}; inserted lines: ${view.insertedLines}\n${view.text}`;
 			return { content: [{ type: "text", text }], details: view, structuredContent: { ...view, text } };
 		},
 	});

@@ -4,18 +4,18 @@ import { access, open, rename, unlink, type FileHandle } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { assertRevision, fileRevision, staleFile } from "./anchor.ts";
-import { applyPatch, type SplicePatch } from "./patch.ts";
+import { applyPatches, type PatchResult, type SplicePatch } from "./patch.ts";
 import { decodeText, readSnapshot, sameState, type FileSnapshot, type TextDocument } from "./reader.ts";
 
-export interface EditInput extends SplicePatch {
+export interface EditInput {
 	revision: string;
+	edits: SplicePatch[];
 }
 
-export interface EditResult {
+export interface EditResult extends Omit<PatchResult, "bytes"> {
 	revision: string;
 	document: TextDocument;
 	changed: boolean;
-	firstChangedLine: number;
 }
 
 // A small filesystem boundary also permits deterministic write-failure tests.
@@ -69,16 +69,28 @@ export async function writeSnapshot(
 	}
 }
 
+function validateEdits(input: EditInput): SplicePatch[] {
+	if ("anchor" in input || "deleteCount" in input || "lines" in input) {
+		throw new Error("INVALID_PATCH: Top-level anchor/deleteCount/lines are not supported. Put each edit in edits[].");
+	}
+	if (!Array.isArray(input.edits) || input.edits.length === 0) {
+		throw new Error("INVALID_PATCH: edits must be a non-empty array.");
+	}
+	return input.edits;
+}
+
 export async function editFile(path: string, input: EditInput, signal?: AbortSignal): Promise<EditResult> {
-	assertRevision(input.revision);
 	return withFileMutationQueue(resolve(path), async () => {
 		signal?.throwIfAborted();
+		assertRevision(input.revision);
+		const edits = validateEdits(input);
 		const snapshot = await readSnapshot(path, signal);
 		if (snapshot.revision !== input.revision) throw staleFile(snapshot.path);
-		const patch = applyPatch(snapshot.document, input);
-		const document = decodeText(patch.bytes);
-		const changed = !snapshot.bytes.equals(patch.bytes);
-		if (changed) await writeSnapshot(snapshot, patch.bytes, signal);
-		return { revision: fileRevision(patch.bytes), document, changed, firstChangedLine: patch.firstChangedLine };
+		const { bytes, ...summary } = applyPatches(snapshot.document, edits);
+		const document = decodeText(bytes);
+		const changed = !snapshot.bytes.equals(bytes);
+		signal?.throwIfAborted();
+		if (changed) await writeSnapshot(snapshot, bytes, signal);
+		return { revision: fileRevision(bytes), document, changed, ...summary };
 	});
 }
