@@ -2,6 +2,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { deriveSessionName, HANDOFF_ENTRY_TYPE } from "./record.ts";
 import type { HandoffPayload } from "./bundle.ts";
+import { assertHandoffDraft } from "./data.ts";
 
 // Pi 1.2.0 declares, but does not re-export, ReplacedSessionContext.
 type NewSessionOptions = NonNullable<Parameters<ExtensionCommandContext["newSession"]>[0]>;
@@ -17,6 +18,7 @@ export async function openHandoffSession(
 		onReplacement?: (ctx: HandoffSessionContext) => void;
 	} = {},
 ): Promise<{ cancelled: boolean; sessionId?: string }> {
+	assertHandoffDraft(data);
 	await options.assertActive?.();
 	options.beforeSwitch?.();
 	let sessionId: string | undefined;

@@ -12,17 +12,14 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type UserMessage, uuidv7 } from "@earendil-works/pi-ai";
 import {
 	BorderedLoader,
 	buildSessionContext,
 	convertToLlm,
 	type ExtensionAPI,
-	ExtensionEditorComponent,
 	getAgentDir,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
-import { getKeybindings } from "@earendil-works/pi-tui";
 
 import {
 	buildHandoffRecord,
@@ -37,43 +34,12 @@ import { parseHandoffArgs } from "./options.ts";
 import { HandoffStore } from "./bundle.ts";
 import { openHandoffSession } from "./session.ts";
 import { HerdrClient, herdrEnvironment } from "./herdr.ts";
-
-const SYSTEM_PROMPT = `你是一名上下文交接助手。请根据对话历史和用户的新会话目标，生成一份聚焦任务的提示词，满足以下要求：
-
-1. 概括对话中与目标相关的上下文（已作出的决策、采用的方法、关键发现）
-2. 列出讨论或修改过的相关文件
-3. 根据用户目标明确说明下一步任务
-4. 内容完整、可独立使用，让新会话无需查看旧对话即可继续工作
-
-将回复写成用户可直接发送以开始新会话的提示词。使用中文撰写，代码、命令和文件路径保留原文。简明扼要，但包含所有必要的上下文。不要添加“以下是提示词”等开场白，只输出提示词本身。
-
-输出格式示例：
-## 上下文
-我们一直在处理 X。关键决策：
-- 决策 1
-- 决策 2
-
-涉及的文件：
-- path/to/file1.ts
-- path/to/file2.ts
-
-## 任务
-[根据用户目标清楚描述接下来要做的事情]`;
-
-/** Height cap for a bottom panel, leaving room for Pi's surrounding UI. */
-const PANEL_MAX_HEIGHT_PERCENT = 92;
-/** Rows reserved below the panel for Pi's editor/footer. */
-const PANEL_RESERVED_ROWS = 2;
-
-/** Maximum panel rows within the terminal height minus the reserved rows. */
-function panelRowBudget(termRows: number): number {
-	const capped = Math.floor((termRows * PANEL_MAX_HEIGHT_PERCENT) / 100);
-	const available = Math.max(1, termRows - PANEL_RESERVED_ROWS);
-	return Math.max(1, Math.min(capped, available));
-}
+import { generateHandoff } from "./generate.ts";
+import { renderHandoffPrompt, type HandoffData } from "./data.ts";
+import { PANEL_RESERVED_ROWS, reviewHandoff } from "./review.ts";
 
 type HandoffResult =
-	| { status: "ok"; prompt: string }
+	| { status: "ok"; handoff: HandoffData }
 	| { status: "cancelled" }
 	| { status: "error"; message: string };
 
@@ -103,7 +69,7 @@ export default function handoffExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("handoff", {
-		description: "Hand off a reviewed draft to a new herdr tab (--split right|down, --here)",
+		description: "Hand off reviewed structured context to a new herdr tab (--split right|down, --here)",
 		handler: async (args, ctx) => {
 			if (ctx.mode !== "tui") {
 				const message = "handoff requires interactive mode";
@@ -168,16 +134,6 @@ export default function handoffExtension(pi: ExtensionAPI) {
 				}
 
 				const currentSessionFile = ctx.sessionManager.getSessionFile();
-				const userMessage: UserMessage = {
-					role: "user",
-					content: [
-						{
-							type: "text",
-							text: `## 对话历史\n\n${conversationText}\n\n## 用户的新会话目标\n\n${goal}`,
-						},
-					],
-					timestamp: Date.now(),
-				};
 
 				const result = await ctx.ui.custom<HandoffResult>((tui, theme, _kb, done) => {
 					const loader = new BorderedLoader(tui, theme, "Generating handoff draft...");
@@ -193,36 +149,10 @@ export default function handoffExtension(pi: ExtensionAPI) {
 					operation.cancelUI = cancelUI;
 					loader.onAbort = cancelUI;
 
-					const doGenerate = async (): Promise<HandoffResult> => {
-						// Use the registry's simple streaming API with the generation-only options.
-						const response = await ctx.modelRegistry
-							.streamSimple(
-								model,
-								{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-								{ signal, cacheRetention: "none", sessionId: uuidv7() },
-							)
-							.result();
-
-						if (signal.aborted || response.stopReason === "aborted") {
-							return { status: "cancelled" };
-						}
-						if (response.stopReason === "error") {
-							return { status: "error", message: response.errorMessage ?? "LLM error" };
-						}
-
-						const prompt = response.content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
-							.map((c) => c.text)
-							.join("\n");
-
-						if (!prompt.trim()) {
-							return { status: "error", message: "No handoff prompt received" };
-						}
-						return { status: "ok", prompt };
-					};
-
-					doGenerate()
-						.then((value) => { if (isValid()) finish(value); })
+					generateHandoff({
+						registry: ctx.modelRegistry, model, conversation: conversationText, goal, signal,
+					})
+						.then((handoff) => { if (isValid()) finish({ status: "ok", handoff }); })
 						.catch((error: unknown) => {
 							if (!isValid()) return;
 							finish(signal.aborted
@@ -251,68 +181,18 @@ export default function handoffExtension(pi: ExtensionAPI) {
 					return;
 				}
 
-				const editedPrompt = await ctx.ui.custom<string | undefined>((tui, _theme, kb, done) => {
-					const finish = (value: string | undefined) => {
-						if (operation.cancelUI !== cancelUI) return;
-						operation.cancelUI = undefined;
-						done(value);
-					};
-					const cancelUI = () => finish(undefined);
-					operation.cancelUI = cancelUI;
-					const editor = new ExtensionEditorComponent(
-						tui, kb,
-						`Review handoff draft (confirm: ${destination === "here" ? "same pane" : destination === "tab" ? "new herdr tab" : `split ${destination}`}; does not send)`,
-						result.prompt, finish, cancelUI,
-						{ description: "External editor is disabled here to protect pasted text (Pi 1.2.0)." },
-					);
-					// A bottom panel taller than its budget is clamped to the top of
-					// the terminal, which would hide the hint and the editor cursor.
-					// Clip from the top instead: keep the editor and its chrome.
-					const renderEditor = editor.render.bind(editor);
-					editor.render = (width: number): string[] => {
-						const lines = renderEditor(width);
-						const budget = panelRowBudget(tui.terminal.rows ?? 24);
-						return lines.length > budget
-							? lines.slice(lines.length - budget)
-							: lines;
-					};
-					const handleInput = editor.handleInput.bind(editor);
-					editor.handleInput = (data) => {
-						if (!isValid() || operation.cancelUI !== cancelUI) return;
-						// Keep Pi's cancel-key precedence, including customized bindings.
-						if (!getKeybindings().matches(data, "tui.select.cancel") && kb.matches(data, "app.editor.external")) {
-							ctx.ui.notify("External editor is disabled in handoff review: Pi 1.2.0 can lose collapsed paste content. Edit here or in the new session instead.", "warning");
-							return;
-						}
-						handleInput(data);
-					};
-					return editor;
-				}, {
-					overlay: true,
-					overlayOptions: {
-						anchor: "bottom-center",
-						width: "100%",
-						// Keep Pi's bottom rows visible below the panel.
-						margin: { bottom: PANEL_RESERVED_ROWS },
-					},
-				});
+				const handoff = await reviewHandoff(ctx, result.handoff, { destination, operation, isValid });
 				if (!isValid()) return;
-
-				if (editedPrompt === undefined) {
+				if (!handoff) {
 					ctx.ui.notify("Handoff review cancelled. No new session was created.", "info");
 					return;
 				}
-				if (!editedPrompt.trim()) {
-					ctx.ui.notify("Handoff prompt is empty. No new session was created.", "warning");
-					return;
-				}
+				const editedPrompt = renderHandoffPrompt(handoff);
 
-				// Capture provenance from the outgoing session before switching. Only this
-				// compact metadata reaches the new session, never the old transcript or
-				// cards. The chain follows the active branch, so a fork of a common source
-				// yields source -> this session without borrowing a sibling's history.
+				// Store the approved data alongside provenance, never the old transcript.
+				// Lineage follows the active branch, not a sibling's history.
 				const record = buildHandoffRecord({
-					goal,
+					goal, handoff,
 					source: {
 						id: ctx.sessionManager.getSessionId(),
 						name: ctx.sessionManager.getSessionName(),

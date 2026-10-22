@@ -6,6 +6,7 @@ import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import type { HandoffRecordData } from "./record.ts";
+import { assertHandoffDraft } from "./data.ts";
 
 const execFileAsync = promisify(execFile);
 const ID_PATTERN = /^[a-f0-9]{64}$/;
@@ -66,6 +67,7 @@ function validateEnvelope(value: unknown, id: string): Envelope {
 		const link = object(value);
 		if (!text(link.id) || (link.name !== undefined && !text(link.name))) throw new Error("Invalid handoff chain");
 	}
+	assertHandoffDraft(raw as unknown as Envelope);
 	return raw as unknown as Envelope;
 }
 

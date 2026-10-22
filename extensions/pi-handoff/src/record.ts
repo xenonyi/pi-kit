@@ -1,8 +1,8 @@
 /**
  * Handoff provenance record: session naming, lineage metadata, and the chat card.
  *
- * The /handoff command stores one small record per new session as a custom
- * entry (never part of LLM context) and renders it through an entry renderer.
+ * The /handoff command stores approved structured content and provenance in a
+ * custom entry (outside LLM context); the entry renderer shows the provenance.
  * Kept separate from command.ts so the naming, chain, and card rules can be
  * verified without running the command.
  */
@@ -14,6 +14,7 @@ import type {
 	Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, sliceByColumn, Text, visibleWidth } from "@earendil-works/pi-tui";
+import { validateHandoffData, type HandoffData } from "./data.ts";
 
 /** Custom session entry type used to store handoff provenance. */
 export const HANDOFF_ENTRY_TYPE = "pi-handoff";
@@ -48,6 +49,8 @@ export interface HandoffRecordData {
 	chain: HandoffLink[];
 	/** Epoch milliseconds when the handoff session was created. */
 	createdAt: number;
+	/** Approved structured content. Optional only for legacy provenance entries. */
+	handoff?: HandoffData;
 }
 
 /** One card line; the renderer owns colors, this module owns content. */
@@ -125,6 +128,7 @@ export function readHandoffChain(entries: readonly SessionEntry[]): HandoffLink[
 /** Build the record stored in the new session. */
 export function buildHandoffRecord(options: {
 	goal: string;
+	handoff: HandoffData;
 	source: { id: string; name?: string; file?: string };
 	inheritedChain: readonly HandoffLink[];
 	createdAt?: number;
@@ -134,6 +138,7 @@ export function buildHandoffRecord(options: {
 	if (options.source.file) source.file = options.source.file;
 	return {
 		goal: options.goal,
+		handoff: validateHandoffData(options.handoff, options.goal),
 		source,
 		chain: normalizeHandoffChain([...options.inheritedChain, source]),
 		createdAt: options.createdAt ?? Date.now(),
