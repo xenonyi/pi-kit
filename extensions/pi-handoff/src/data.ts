@@ -99,50 +99,71 @@ export function validateHandoffData(value: unknown, expectedGoal?: string): Hand
 
 /**
  * Handoff content is plain text: the draft goes to an editor and a new
- * session, so escaping would leak backslashes into the payload. Only the
- * TUI preview opts into Markdown escaping to keep content out of its
- * structure.
+ * session, so escaping never belongs in the payload. The escaped form is
+ * retained only to validate packages created before the plain-text switch.
  */
-function markdown(value: string, escape: boolean): string {
+function markdown(value: string, escaped: boolean): string {
 	const normalized = value.replace(/\r\n?/g, "\n");
-	return escape ? normalized.replace(/[\\`*_{}\[\]<>()#!|~.+\-]/g, "\\$&") : normalized;
+	return escaped ? normalized.replace(/[\\`*_{}\[\]<>()#!|~.+\-]/g, "\\$&") : normalized;
 }
 
-function list(values: readonly string[], ordered = false, escape = false): string {
+function list(values: readonly string[], ordered = false, escaped = false): string {
 	if (values.length === 0) return "（未记录）";
 	return values.map((value, index) =>
-		`${ordered ? `${index + 1}.` : "-"} ${markdown(value, escape).replace(/\n/g, "\n  ")}`).join("\n");
+		`${ordered ? `${index + 1}.` : "-"} ${markdown(value, escaped).replace(/\n/g, "\n  ")}`).join("\n");
 }
 
 const VERIFICATION_LABELS = {
 	passed: "通过", failed: "失败", not_run: "未执行", unknown: "结果未知",
 } as const;
 
+/** Opening line shared by the prompt and its literal review preview. */
+export const HANDOFF_INTRO =
+	"请基于以下交接继续工作，遵守约束；未记录或未验证的事项不代表已完成或没有风险。";
+
+/** One prompt section; the preview renders the body verbatim. */
+export interface HandoffSection {
+	title: string;
+	body: string;
+}
+
+function buildSections(data: HandoffData, escaped: boolean): HandoffSection[] {
+	return [
+		{ title: "目标", body: markdown(data.goal, escaped) },
+		{ title: "上下文", body: markdown(data.summary, escaped) },
+		{ title: "已完成工作", body: list(data.completedWork, false, escaped) },
+		{ title: "关键决策", body: list(data.decisions, false, escaped) },
+		{ title: "相关文件", body: list(data.files.map((file) => `${file.path}：${file.purpose}`), false, escaped) },
+		{ title: "下一步", body: list(data.nextSteps, true, escaped) },
+		{ title: "约束与禁止事项", body: list(data.constraints, false, escaped) },
+		{ title: "待确认问题", body: list(data.openQuestions, false, escaped) },
+		{ title: "风险与阻塞", body: list(data.risks, false, escaped) },
+		{
+			title: "验证记录",
+			body: list(data.verification.map((item) =>
+				`[${VERIFICATION_LABELS[item.status]}] ${item.action}：${item.details}`), false, escaped),
+		},
+	];
+}
+
+/** Plain sections for the review preview; no Markdown escaping is injected. */
+export function handoffSections(data: HandoffData): HandoffSection[] {
+	return buildSections(data, false);
+}
+
 /**
  * The preview and the delivered draft share one source of truth. Delivery
- * writes plain text; only the preview opts into Markdown escaping.
+ * writes plain text; the legacy option only reproduces pre-plaintext
+ * packages for validation.
  */
 export function renderHandoffPrompt(
 	data: HandoffData,
-	options: { markdown?: boolean } = {},
+	options: { legacyEscaped?: boolean } = {},
 ): string {
-	const escape = options.markdown === true;
-	const sections = [
-		["目标", markdown(data.goal, escape)],
-		["上下文", markdown(data.summary, escape)],
-		["已完成工作", list(data.completedWork, false, escape)],
-		["关键决策", list(data.decisions, false, escape)],
-		["相关文件", list(data.files.map((file) => `${file.path}：${file.purpose}`), false, escape)],
-		["下一步", list(data.nextSteps, true, escape)],
-		["约束与禁止事项", list(data.constraints, false, escape)],
-		["待确认问题", list(data.openQuestions, false, escape)],
-		["风险与阻塞", list(data.risks, false, escape)],
-		["验证记录", list(data.verification.map((item) =>
-			`[${VERIFICATION_LABELS[item.status]}] ${item.action}：${item.details}`), false, escape)],
-	];
 	return [
-		"请基于以下交接继续工作，遵守约束；未记录或未验证的事项不代表已完成或没有风险。",
-		...sections.map(([title, body]) => `## ${title}\n\n${body}`),
+		HANDOFF_INTRO,
+		...buildSections(data, options.legacyEscaped === true)
+			.map(({ title, body }) => `## ${title}\n\n${body}`),
 	].join("\n\n");
 }
 
@@ -156,7 +177,7 @@ export function assertHandoffDraft(data: {
 	// Prompts created before the plain-text switch still carry Markdown
 	// escapes; accept them so a package from an older process is not rejected.
 	const prompt = renderHandoffPrompt(handoff);
-	const legacy = renderHandoffPrompt(handoff, { markdown: true });
+	const legacy = renderHandoffPrompt(handoff, { legacyEscaped: true });
 	if (data.record.goal !== data.goal || (data.prompt !== prompt && data.prompt !== legacy)) {
 		throw new Error("Handoff prompt does not match its structured data");
 	}

@@ -1,9 +1,12 @@
-/** Read-only Markdown preview, with schema-validated JSON editing on demand. */
+/** Read-only literal preview, with schema-validated JSON editing on demand. */
 import {
 	type ExtensionCommandContext, DynamicBorder, ExtensionEditorComponent, getMarkdownTheme,
 } from "@earendil-works/pi-coding-agent";
-import { Key, Markdown, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
-import { renderHandoffPrompt, validateHandoffData, type HandoffData } from "./data.ts";
+import {
+	Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi,
+	type MarkdownTheme, type TuiMouseEvent,
+} from "@earendil-works/pi-tui";
+import { HANDOFF_INTRO, handoffSections, validateHandoffData, type HandoffData } from "./data.ts";
 import type { HandoffDestination } from "./options.ts";
 
 export const PANEL_RESERVED_ROWS = 2;
@@ -12,11 +15,34 @@ function panelRowBudget(termRows: number): number {
 	return Math.max(1, Math.min(Math.floor(termRows * 0.92), termRows - PANEL_RESERVED_ROWS));
 }
 
+/** Render the plain prompt verbatim; only section headings and list markers get styling. */
+function previewLines(data: HandoffData, width: number, theme: MarkdownTheme): string[] {
+	const lines: string[] = [];
+	const wrap = (text: string, prefix = "", indent = ""): void => {
+		const available = Math.max(1, width - visibleWidth(prefix));
+		const chunks = text === "" ? [""] : wrapTextWithAnsi(text, available);
+		for (const [index, chunk] of chunks.entries()) {
+			lines.push(`${index === 0 ? prefix : indent}${chunk}`);
+		}
+	};
+	wrap(HANDOFF_INTRO);
+	for (const { title, body } of handoffSections(data)) {
+		lines.push("", theme.heading(title), "");
+		for (const line of body.split("\n")) {
+			if (line === "") { lines.push(""); continue; }
+			const item = /^((?:- |\d+\. ))(.*)$/.exec(line);
+			if (item) wrap(item[2], theme.listBullet(item[1]), " ".repeat(visibleWidth(item[1])));
+			else wrap(line);
+		}
+	}
+	return lines;
+}
+
 interface ReviewOperation {
 	cancelUI?: () => void;
 }
 
-/** Bottom overlay used by the Markdown preview; the JSON editor is inline. */
+/** Bottom overlay used by the literal preview; the JSON editor is inline. */
 const OVERLAY = {
 	overlay: true,
 	overlayOptions: {
@@ -45,7 +71,16 @@ export async function reviewHandoff(
 			};
 			const cancelUI = () => finish(undefined);
 			operation.cancelUI = cancelUI;
-			const preview = new Markdown(renderHandoffPrompt(data, { markdown: true }), 0, 0, getMarkdownTheme());
+			const markdownTheme = getMarkdownTheme();
+			let previewWidth = -1;
+			let previewBody: string[] = [];
+			const buildPreview = (width: number): string[] => {
+				if (width !== previewWidth) {
+					previewWidth = width;
+					previewBody = previewLines(data, width, markdownTheme);
+				}
+				return previewBody;
+			};
 			const border = new DynamicBorder((text) => theme.fg("border", text));
 			let offset = 0;
 			let viewport = 1;
@@ -65,12 +100,13 @@ export async function reviewHandoff(
 					const hintRows = budget >= 5 ? 2 : budget >= 4 ? 1 : 0;
 					// Reserve the frame and hints before sizing content; drop chrome on short terminals.
 					viewport = Math.max(0, budget - Math.min(2, budget) - title.length - hintRows);
-					const lines = preview.render(width);
+					const lines = buildPreview(width);
 					contentHeight = lines.length;
 					offset = Math.min(offset, Math.max(0, contentHeight - viewport));
 					const separator = theme.fg("muted", " · ");
 					const actions = [keyHint(confirm, "confirm"), keyHint("ctrl+e", "edit json"), keyHint(cancel, "cancel")].join(separator);
-					const navigation = keyHint(`${scrollKeys} pageup/pagedown home/end`, `scroll (${offset + 1}/${contentHeight})`);
+					const navigation = keyHint(`${scrollKeys} pageup/pagedown home/end`, `scroll (${offset + 1}/${contentHeight})`)
+						+ (tui.mode === "fullscreen" ? theme.fg("muted", " / wheel") : "");
 					const hints = hintRows === 2 ? [actions, navigation]
 						: hintRows === 1 ? [`${keyHint("j/k", "scroll")}${separator}${actions}`] : [];
 					const frame = border.render(width);
@@ -97,7 +133,19 @@ export async function reviewHandoff(
 					offset = Math.max(0, Math.min(offset, Math.max(0, contentHeight - viewport)));
 					tui.requestRender();
 				},
-				invalidate(): void { preview.invalidate(); },
+				handleMouse(event: TuiMouseEvent): { handled: true } | undefined {
+					if (event.type !== "wheel") return undefined;
+					if (!isValid() || operation.cancelUI !== cancelUI) return undefined;
+					const delta = event.wheelDelta ?? 0;
+					const next = Math.max(0, Math.min(offset + delta, Math.max(0, contentHeight - viewport)));
+					if (next !== offset) {
+						offset = next;
+						tui.requestRender();
+					}
+					// Consume at the edges too, so the wheel never scrolls the transcript behind the overlay.
+					return { handled: true };
+				},
+				invalidate(): void { previewWidth = -1; },
 			};
 		}, OVERLAY);
 		if (!isValid() || action === undefined) return undefined;

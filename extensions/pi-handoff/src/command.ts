@@ -194,9 +194,8 @@ export default function handoffExtension(pi: ExtensionAPI) {
 				});
 				const data = { prompt: editedPrompt, goal, record };
 				const previousDraft = ctx.ui.getEditorText();
-				// Keep a local copy before any external side effect. On failure it stays
-				// here; on success restore the old draft only if the user did not edit it.
-				ctx.ui.setEditorText(editedPrompt);
+				// Never preload the reviewed draft into this editor: an Enter while
+				// herdr starts the target must not submit it to this session.
 				if (destination !== "here") {
 					ctx.ui.setStatus("pi-handoff", "Opening handoff in herdr…");
 					try {
@@ -207,11 +206,17 @@ export default function handoffExtension(pi: ExtensionAPI) {
 							herdr: herdr!,
 							extension: fileURLToPath(new URL("../index.ts", import.meta.url)),
 							signal: operation.controller.signal,
-							hasDraftBackup: () => isValid() && ctx.ui.getEditorText() === editedPrompt,
+							// The draft stays in memory here. Keep the private package
+							// when the editor changed and the catch cannot restore it.
+							canRestoreDraft: () => isValid() && ctx.ui.getEditorText() === previousDraft,
 						});
 						if (!isValid()) return;
-						if (ctx.ui.getEditorText() === editedPrompt) ctx.ui.setEditorText(previousDraft);
 						ctx.ui.notify(`Handoff draft ready in ${target.paneId}. Nothing sent; source session unchanged.`, "info");
+					} catch (error) {
+						// Restore the draft for a retry only if the user has not changed
+						// this editor since the command started.
+						if (isValid() && ctx.ui.getEditorText() === previousDraft) ctx.ui.setEditorText(editedPrompt);
+						throw error;
 					} finally {
 						if (isValid()) ctx.ui.setStatus("pi-handoff", undefined);
 					}
@@ -219,13 +224,20 @@ export default function handoffExtension(pi: ExtensionAPI) {
 				}
 
 				// Only an explicit --here replaces the source session. Use a fresh
-				// withSession context after the old runtime has shut down.
-				const newSessionResult = await openHandoffSession(ctx, data, {
-					beforeSwitch: () => { operation.allowReplacement = true; },
-					canPopulate: () => operation.allowReplacement,
-				});
-				if (isValid() && newSessionResult.cancelled) {
-					ctx.ui.notify("Handoff session switch cancelled. Reviewed draft retained in the current editor.", "info");
+				// withSession context after the old runtime has shut down. The
+				// replacement fills its own editor; restore here only on cancel/error.
+				try {
+					const newSessionResult = await openHandoffSession(ctx, data, {
+						beforeSwitch: () => { operation.allowReplacement = true; },
+						canPopulate: () => operation.allowReplacement,
+					});
+					if (isValid() && newSessionResult.cancelled) {
+						ctx.ui.setEditorText(editedPrompt);
+						ctx.ui.notify("Handoff session switch cancelled. Reviewed draft retained in the current editor.", "info");
+					}
+				} catch (error) {
+					if (isValid()) ctx.ui.setEditorText(editedPrompt);
+					throw error;
 				}
 			} catch (error: unknown) {
 				// Before replacement we can report via the original UI. After shutdown

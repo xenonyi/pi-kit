@@ -77,9 +77,9 @@ export class HerdrClient {
 		});
 	}
 
-	async create(destination: Exclude<HandoffDestination, "here">, cwd: string, id: string, signal: AbortSignal): Promise<HerdrTarget> {
+	async create(destination: Exclude<HandoffDestination, "here">, cwd: string, label: string, id: string, signal: AbortSignal): Promise<HerdrTarget> {
 		const result = destination === "tab"
-			? await this.run(["tab", "create", "--workspace", this.environment.workspaceId, "--cwd", cwd, "--label", "Pi handoff", "--no-focus"], 15_000, signal)
+			? await this.run(["tab", "create", "--workspace", this.environment.workspaceId, "--cwd", cwd, "--label", label, "--no-focus"], 15_000, signal)
 			: await this.run(["pane", "split", "--pane", this.environment.paneId, "--direction", destination, "--cwd", cwd, "--no-focus"], 15_000, signal);
 		if (destination === "tab") field(object(result.tab), "tab_id");
 		const pane = object(destination === "tab" ? result.root_pane : result.pane);
