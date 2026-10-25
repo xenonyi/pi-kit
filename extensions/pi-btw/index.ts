@@ -100,7 +100,7 @@ async function queryBtwAnswer(
 
 /** Height cap for the bottom panel, leaving room for Pi's surrounding UI. */
 const PANEL_MAX_HEIGHT_PERCENT = 92;
-/** Minimum rows reserved for surrounding UI, such as Pi's footer. */
+/** Rows kept free below the inline panel for Pi's footer and surrounding UI. */
 const PANEL_RESERVED_ROWS = 2;
 /** Rows always used by the panel: top rule, title, footer, bottom rule. */
 const PANEL_CHROME_ROWS = 4;
@@ -347,7 +347,7 @@ class BtwPanel implements Component {
 
         const lines = panel.render(renderWidth);
         // Extremely short terminals cannot fit the chrome: keep the footer and
-        // the bottom rule instead of letting the overlay clip them.
+        // the bottom rule instead of letting the panel clip them.
         const budget = panelRowBudget(rows);
         if (lines.length > budget) {
             lines.splice(0, lines.length - budget);
@@ -439,15 +439,6 @@ async function runBtwCommand(
             });
 
         return loader;
-    },
-    {
-        overlay: true,
-        overlayOptions: {
-            anchor: "bottom-center",
-            width: "100%",
-            // Keep Pi's bottom rows visible below the panel.
-            margin: { bottom: PANEL_RESERVED_ROWS },
-        },
     });
 
     if (!answerResult || answerResult.status === "cancelled") {
@@ -466,7 +457,7 @@ async function runBtwCommand(
     }
 
     const usageText = formatUsage(answerResult.usage);
-    const overlayMeta = usageText ? `${btwModel.id} · ${usageText}` : btwModel.id;
+    const panelMeta = usageText ? `${btwModel.id} · ${usageText}` : btwModel.id;
 
     await ctx.ui.custom<void>(
         (tui, theme, _kb, done) => {
@@ -475,18 +466,9 @@ async function runBtwCommand(
                 theme,
                 question,
                 answerResult.answer,
-                overlayMeta,
+                panelMeta,
                 done,
             );
-        },
-        {
-            overlay: true,
-            overlayOptions: {
-                anchor: "bottom-center",
-                width: "100%",
-                // Keep Pi's bottom rows visible below the panel.
-                margin: { bottom: PANEL_RESERVED_ROWS },
-            },
         },
     );
 }

@@ -210,7 +210,7 @@ export function extractResponseText(
 }
 
 /**
- * One-line token/cost summary for the overlay header.
+ * One-line token/cost summary for the panel header.
  * Returns undefined when the provider reported no usage, so the sidebar stays
  * honest instead of printing "0 tokens".
  */
@@ -225,7 +225,7 @@ export function formatUsage(
 }
 
 /**
- * Clamp the overlay scroll position to the rows actually visible.
+ * Clamp the panel scroll position to the rows actually visible.
  * Kept pure so the viewport math can be tested without a terminal.
  */
 export function resolveScrollState(
