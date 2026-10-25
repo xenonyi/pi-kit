@@ -45,7 +45,7 @@ export async function reviewHandoff(
 			};
 			const cancelUI = () => finish(undefined);
 			operation.cancelUI = cancelUI;
-			const preview = new Markdown(renderHandoffPrompt(data), 0, 0, getMarkdownTheme());
+			const preview = new Markdown(renderHandoffPrompt(data, { markdown: true }), 0, 0, getMarkdownTheme());
 			const border = new DynamicBorder((text) => theme.fg("border", text));
 			let offset = 0;
 			let viewport = 1;
