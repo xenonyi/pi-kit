@@ -36,7 +36,7 @@ import { openHandoffSession } from "./session.ts";
 import { HerdrClient, herdrEnvironment } from "./herdr.ts";
 import { generateHandoff } from "./generate.ts";
 import { renderHandoffPrompt, type HandoffData } from "./data.ts";
-import { PANEL_RESERVED_ROWS, reviewHandoff } from "./review.ts";
+import { reviewHandoff } from "./review.ts";
 
 type HandoffResult =
 	| { status: "ok"; handoff: HandoffData }
@@ -161,14 +161,6 @@ export default function handoffExtension(pi: ExtensionAPI) {
 						});
 
 					return loader;
-				}, {
-					overlay: true,
-					overlayOptions: {
-						anchor: "bottom-center",
-						width: "100%",
-						// Keep Pi's bottom rows visible below the panel.
-						margin: { bottom: PANEL_RESERVED_ROWS },
-					},
 				});
 				if (!isValid()) return;
 

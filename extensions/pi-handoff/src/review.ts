@@ -16,6 +16,7 @@ interface ReviewOperation {
 	cancelUI?: () => void;
 }
 
+/** Bottom overlay used by the Markdown preview; the JSON editor is inline. */
 const OVERLAY = {
 	overlay: true,
 	overlayOptions: {
@@ -133,7 +134,7 @@ export async function reviewHandoff(
 					handleInput(input);
 				};
 				return editor;
-			}, OVERLAY);
+			});
 			if (!isValid()) return undefined;
 			if (edited === undefined) break;
 			json = edited;
