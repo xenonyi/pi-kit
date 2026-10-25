@@ -30,11 +30,20 @@ export interface ToolBox {
 	/** Raw arguments, read only to build the row's one-line preview. */
 	args?: unknown;
 	/** Pi's own switch for terminal graphics (`false` keeps images textual). */
+	/** Pi's own switch for terminal graphics (`false` keeps images textual). */
 	showImages?: boolean;
+	/** Pi's horizontal padding inside the card (`outputPad`: 0 or 1). */
+	outputPad?: number;
 	/** Pi's result; `content` is read for image blocks, nothing else. */
 	result?: { isError?: boolean; durationMs?: number; content?: unknown };
-	/** Pi's drawn images, read only for the caption's pixel size. */
-	imageComponents?: ReadonlyArray<{ dimensions?: { widthPx?: number; heightPx?: number } }>;
+	/**
+	 * Pi's drawn images, in result order: the pixel size for the caption and
+	 * pi's own renderer, so a card can be laid out around the rows it covers.
+	 */
+	imageComponents?: ReadonlyArray<{
+		dimensions?: { widthPx?: number; heightPx?: number };
+		render?(width: number): string[];
+	}>;
 	ui?: { requestRender?(): void };
 	setExpanded(expanded: boolean): void;
 }

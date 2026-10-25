@@ -8,11 +8,22 @@ import {
 	ToolExecutionComponent,
 	UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
-import { cardColor, CARD_INDENT, formatCallRow, formatCardStrip, formatFailedRow, formatSummary, formatTrunkRow, nestResult } from "./format.ts";
-import { getRuntime } from "./runtime.ts";
 import {
-	cardAbove,
+	cardColor,
+	cardIndent,
+	formatCallRow,
+	formatCardStrip,
+	formatFailedRow,
+	formatSummary,
+	formatTrunkRow,
+	type ImageRun,
+	measurePadLeft,
+	nestResult,
+} from "./format.ts";
+import { getRuntime, getShapeProblem, reportShapeProblem } from "./runtime.ts";
+import {
 	callRowOf,
+	cardAbove,
 	classifyAssistant,
 	dropCarrier,
 	imageCount,
@@ -22,11 +33,11 @@ import {
 	planCarrier,
 	planTool,
 	summaryFor,
+	type ToolBox,
 	takeLateJoin,
 	thinkingRuns,
 	toggleGroupLevel,
 	withPointerClick,
-	type ToolBox,
 } from "./state.ts";
 import { getTheme } from "./theme.ts";
 
@@ -50,6 +61,11 @@ import { getTheme } from "./theme.ts";
  * host's own module instance, so patching the prototype reaches the live
  * transcript. Nothing is registered as a tool, so the model-facing tool set,
  * permissions and caching are untouched.
+ *
+ * None of those fields is a public API, and this file reads them through local
+ * interfaces, so a rename would compile and quietly draw `undefined`. Every
+ * render therefore probes the shape first: one mismatch stops all folding for
+ * the rest of the process, and pi's own rows — always correct — take over.
  */
 
 type Render = (this: unknown, width: number) => string[];
@@ -99,7 +115,6 @@ interface ToolInternals extends ToolBox {
 
 interface AssistantInternals {
 	lastMessage?: unknown;
-	isStreaming?: boolean;
 }
 
 const TOOL_PATCHED = Symbol.for("pi-fold-runs:tool-patch");
@@ -127,6 +142,42 @@ function enabled(): boolean {
 	return getRuntime().config.enabled;
 }
 
+/** Everything this module patches, plus the probes, still look like pi's. */
+function active(): boolean {
+	return enabled() && getShapeProblem() === undefined;
+}
+
+/**
+ * The fields these patches read. Pi declares them `private`, so a rename
+ * reaches us as a silent `undefined` — worse than a throw, because the rows
+ * would render with `undefined` in them. One mismatch turns folding off for
+ * the rest of the process; pi's own rows are always correct.
+ */
+function probeTool(tool: ToolInternals): string | undefined {
+	if (typeof tool.toolName !== "string") return "ToolExecutionComponent.toolName is not a string";
+	if (typeof tool.isPartial !== "boolean") return "ToolExecutionComponent.isPartial is not a boolean";
+	if (typeof tool.setExpanded !== "function") return "ToolExecutionComponent.setExpanded is missing";
+	if (typeof tool.ui?.requestRender !== "function") return "ToolExecutionComponent.ui.requestRender is missing";
+	return undefined;
+}
+
+/** `lastMessage` drives both the boundary test and the thinking count. */
+function probeAssistant(message: AssistantInternals): string | undefined {
+	const last = message.lastMessage;
+	// A message that has not rendered yet has nothing to classify.
+	if (last === undefined) return undefined;
+	if (typeof last !== "object" || last === null || !Array.isArray((last as { content?: unknown }).content)) {
+		return "AssistantMessageComponent.lastMessage is not a message";
+	}
+	return undefined;
+}
+
+/** One probe failure is enough: report it once and hand every row back to pi. */
+function failShape(problem: string): void {
+	reportShapeProblem(problem);
+	console.debug(`[pi-fold-runs] unsupported pi component shape (${problem}); using pi's own rows`);
+}
+
 function patchToolComponent(): void {
 	const proto = ToolExecutionComponent.prototype as unknown as RenderProto & Record<PropertyKey, unknown>;
 	if (proto[TOOL_PATCHED] === true) return;
@@ -136,11 +187,17 @@ function patchToolComponent(): void {
 	proto.render = function (width: number): string[] {
 		const tool = this as unknown as ToolInternals;
 		// Pi's own `hideComponent` (and our off switch) keep the native path.
-		if (tool.hideComponent === true || !enabled()) {
+		if (tool.hideComponent === true || !active()) {
 			layouts.delete(this as object);
 			return render.call(this, width);
 		}
 		try {
+			const problem = probeTool(tool);
+			if (problem) {
+				failShape(problem);
+				layouts.delete(this as object);
+				return render.call(this, width);
+			}
 			// Another extension may have wrapped a boundary since; re-wrap so the
 			// groups keep being cut in the right places.
 			ensureBoundaries();
@@ -203,11 +260,27 @@ function patchToolComponent(): void {
 			if (plan.block) {
 				const row = callRowOf(tool);
 				const card = cardColor(row);
-				const native = render.call(this, Math.max(1, width - CARD_INDENT));
-				const nested = nestResult(native, theme, width, imageCount(tool) > 0, last, card, imageLabels(tool));
+				// How many columns pi pads inside its card. `outputPad` is private:
+				// read it while it is there, otherwise measure it from pi's own rows
+				// and re-render once at the corrected width.
+				let padLeft =
+					typeof tool.outputPad === "number" ? Math.min(2, Math.max(0, Math.trunc(tool.outputPad))) : 1;
+				indent = cardIndent(padLeft);
+				let innerWidth = Math.max(1, width - indent);
+				let native = render.call(this, innerWidth);
+				if (typeof tool.outputPad !== "number") {
+					const measured = measurePadLeft(native);
+					if (measured !== padLeft) {
+						padLeft = measured;
+						indent = cardIndent(padLeft);
+						innerWidth = Math.max(1, width - indent);
+						native = render.call(this, innerWidth);
+					}
+				}
+				const nested = nestResult(native, theme, width, imageRuns(tool, innerWidth), last, card, padLeft);
 				if (nested.passthrough) {
-					// Pi's block holds images but drew no graphics row: give it the whole
-					// width, the one layout that can never clip a terminal image.
+					// Pi's image rows are not where its components report them: give the
+					// block the whole width, the one layout that cannot clip an image.
 					warnImageFallback();
 					const wide = render.call(this, width);
 					const skip = wide[0] === "" ? 1 : 0;
@@ -215,6 +288,8 @@ function patchToolComponent(): void {
 					lines.push(...body);
 					nativeRows = body.length;
 					nativeSkip = skip;
+					// Full width and no gutter: the block is not indented after all.
+					indent = 0;
 				} else {
 					// Pi's top padding row becomes the card's status strip: the open arrow
 					// and the state, plus a click target that collapses this result.
@@ -249,7 +324,7 @@ function patchToolComponent(): void {
 	const previousMouse = (proto as unknown as { handleMouse?: MouseHandler }).handleMouse;
 	if (typeof previousMouse === "function") {
 		(proto as unknown as { handleMouse: MouseHandler }).handleMouse = function (event: MouseEventLike) {
-			if (!enabled()) return previousMouse.call(this, event);
+			if (!active()) return previousMouse.call(this, event);
 			const layout = layouts.get(this as object);
 			if (!layout) return previousMouse.call(this, event);
 			const click = event.type === "click" && (event.button === "left" || event.button === 0);
@@ -291,7 +366,7 @@ function patchToolComponent(): void {
 	const previousExpand = (proto as unknown as { setExpanded: (expanded: boolean) => void }).setExpanded;
 	(proto as unknown as { setExpanded: (expanded: boolean) => void }).setExpanded = function (expanded: boolean) {
 		previousExpand.call(this, expanded);
-		if (!enabled()) return;
+		if (!active()) return;
 		if (noteExpanded(this as object, expanded)) (this as unknown as ToolInternals).ui?.requestRender?.();
 	};
 }
@@ -313,9 +388,14 @@ function wrapAssistant(component: unknown): void {
 	if (isWrapped(render)) return;
 
 	const wrapped: Render = function (this: unknown, width: number): string[] {
-		if (!enabled()) return render.call(this, width);
+		if (!active()) return render.call(this, width);
 		const message = this as unknown as AssistantInternals;
 		try {
+			const problem = probeAssistant(message);
+			if (problem) {
+				failShape(problem);
+				return render.call(this, width);
+			}
 			const role = classifyAssistant(message.lastMessage);
 			if (role === "boundary") {
 				// It grew text: its thinking is no longer a row of the old group.
@@ -347,7 +427,7 @@ function wrapBoundary(component: unknown): void {
 	if (isWrapped(render)) return;
 
 	const wrapped: Render = function (this: unknown, width: number): string[] {
-		if (!enabled()) return render.call(this, width);
+		if (!active()) return render.call(this, width);
 		noteBoundary(this as object);
 		return render.call(this, width);
 	};
@@ -373,22 +453,38 @@ function prototypeOf(component: unknown): (RenderProto & Record<PropertyKey, unk
 
 let imageFallbackWarned = false;
 
-/** One line per run: a result with images but no graphics row is a layout surprise. */
+/** One line per run: a result whose images this module cannot place. */
 function warnImageFallback(): void {
 	if (imageFallbackWarned) return;
 	imageFallbackWarned = true;
-	console.debug("[pi-fold-runs] image result drawn without a terminal graphics row; keeping it at full width");
+	console.debug("[pi-fold-runs] image result left at full width: pi's image rows could not be located");
 }
 
-/** Pixel size of each image Pi drew, one caption per image span. */
-function imageLabels(tool: ToolBox): string[] | undefined {
+/** Pi's own images, in result order: the caption and the rows each draws. */
+function imageRuns(tool: ToolBox, width: number): ImageRun[] | null {
+	const count = imageCount(tool);
+	if (count === 0) return [];
 	const components = tool.imageComponents;
-	if (!Array.isArray(components) || components.length === 0) return undefined;
-	return components.map((component) => {
-		const widthPx = component?.dimensions?.widthPx;
-		const heightPx = component?.dimensions?.heightPx;
-		return typeof widthPx === "number" && typeof heightPx === "number" ? `image ${widthPx}×${heightPx}` : "image";
-	});
+	// Pi builds one component per image block: a different count means this
+	// module and pi disagree about the result, so the block is left alone.
+	if (!Array.isArray(components) || components.length !== count) return null;
+	const runs: ImageRun[] = [];
+	for (const component of components) {
+		// Rendering at the width pi just used is a cache hit, and it is the only
+		// way to learn how many rows the image covers without parsing its
+		// escape sequence.
+		const lines = typeof component.render === "function" ? component.render(width) : undefined;
+		if (!Array.isArray(lines) || lines.length === 0) return null;
+		runs.push({ label: imageLabel(component), rows: lines.length });
+	}
+	return runs;
+}
+
+/** `image 800×600`, or `image` when pi did not report a pixel size. */
+function imageLabel(component: { dimensions?: { widthPx?: number; heightPx?: number } }): string {
+	const widthPx = component.dimensions?.widthPx;
+	const heightPx = component.dimensions?.heightPx;
+	return typeof widthPx === "number" && typeof heightPx === "number" ? `image ${widthPx}×${heightPx}` : "image";
 }
 
 function debug(error: unknown): void {

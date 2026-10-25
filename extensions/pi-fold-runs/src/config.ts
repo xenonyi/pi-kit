@@ -8,6 +8,11 @@ export const CONFIG_FILE_NAME = "pi-fold-runs.json";
 export interface FoldConfig {
 	/** Master switch. `false` hands every row back to Pi. */
 	enabled: boolean;
+	/**
+	 * Hand every row back to Pi when the running pi is outside the line the
+	 * patches were written against. `false` keeps folding on anyway.
+	 */
+	autoDisableOnUnknownVersion: boolean;
 	/** Tools that never fold: they keep Pi's own row and end the current group. */
 	pinned: string[];
 	/** Mention the running call in the summary line. */
@@ -20,6 +25,7 @@ export interface FoldConfig {
 
 export const DEFAULT_CONFIG: FoldConfig = {
 	enabled: true,
+	autoDisableOnUnknownVersion: true,
 	// Only a question's answer has to stay visible without expanding: it is the
 	// result the turn exists to produce. Everything else (diffs included) folds
 	// into the summary and comes back with ctrl+o.
@@ -63,6 +69,12 @@ function normalizeConfig(raw: unknown, source: string): FoldConfig {
 	const root = asObject(raw, source);
 	return {
 		enabled: booleanField(root, "enabled", source, DEFAULT_CONFIG.enabled),
+		autoDisableOnUnknownVersion: booleanField(
+			root,
+			"autoDisableOnUnknownVersion",
+			source,
+			DEFAULT_CONFIG.autoDisableOnUnknownVersion,
+		),
 		pinned: root.pinned === undefined ? [...DEFAULT_CONFIG.pinned] : toolList(root.pinned, `${source}: pinned`),
 		showRunning: booleanField(root, "showRunning", source, DEFAULT_CONFIG.showRunning),
 		showErrors: booleanField(root, "showErrors", source, DEFAULT_CONFIG.showErrors),

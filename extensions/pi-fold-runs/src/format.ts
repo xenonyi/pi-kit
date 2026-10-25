@@ -8,13 +8,54 @@ const ROW_PREFIX_LAST = " └ ";
 /** Gutter under an opened result: the branch continues, or closes on the last call. */
 const CHILD_GUTTER = " │ ";
 const CHILD_CLOSED = "   ";
-/** Terminal graphics prefixes, mirroring pi-tui's (unexported) image check. */
-const KITTY_PREFIX = "\x1b_G";
-const ITERM2_PREFIX = "\x1b]1337;File=";
+/** Columns pi's card text is offset from the gutter, so it lines up with the rows above. */
+const CARD_TEXT_OFFSET = 2;
 export const CHILD_INDENT = 3;
-/** One extra card column, so card text lines up with the call rows above. */
-const CARD_PAD = 1;
-export const CARD_INDENT = CHILD_INDENT + CARD_PAD;
+
+/**
+ * One image pi drew for a call: the caption for the row above it, and how many
+ * rows it covers.
+ *
+ * The row count comes from pi's own image component rather than from parsing
+ * the escape sequence: kitty and iTerm2 put the sequence on different rows, and
+ * nothing here needs to know which protocol drew it.
+ */
+export interface ImageRun {
+	label?: string;
+	rows: number;
+}
+
+/** Width reserved left of pi's card: the gutter plus the card's own offset. */
+export function cardIndent(padLeft: number): number {
+	return CHILD_INDENT + Math.max(0, CARD_TEXT_OFFSET - padLeft);
+}
+
+/**
+ * Columns pi pads inside its card: its `outputPad`, 0 or 1.
+ *
+ * That field is private, so when pi stops exposing it the padding is measured
+ * from pi's own rows instead: the leading whitespace most content rows carry
+ * is that padding. A larger number is content indentation, not padding, so the
+ * answer never leaves 0 or 1.
+ */
+export function measurePadLeft(lines: readonly string[]): number {
+	const counts = new Map<number, number>();
+	for (const line of lines) {
+		const text = stripTerminalSequences(line);
+		if (text.trim() === "") continue;
+		const lead = text.length - text.trimStart().length;
+		counts.set(lead, (counts.get(lead) ?? 0) + 1);
+	}
+	let best = 0;
+	let bestCount = 0;
+	for (const [lead, count] of counts) {
+		if (count > bestCount) {
+			best = lead;
+			bestCount = count;
+		}
+	}
+	return best >= 1 ? 1 : 0;
+}
 
 /** `▸ 4 calls · bash×3 read×1 · ✻ 2 thoughts · ▦ 1 · 1.2s` (`▾` once the group is open) */
 export function formatSummary(summary: GroupSummary, theme: ThemeLike, width: number, open = false): string {
@@ -118,17 +159,18 @@ function isBlankRow(line: string): boolean {
  * rest of the card — native call line included — is Pi's own, so the call is
  * never drawn twice. Rows arrive already painted by Pi at the inner width, so
  * they only need the tree gutter (kept on the terminal background, so the card
- * starts to the right of the trunk), one extra card column that lines the text
- * up with the call rows above, and a clip.
+ * starts to the right of the trunk), pi's own padding column (kept as a card
+ * column so the text lines up with the call rows above), and a clip.
  *
  * Pi puts a `Spacer(1)` above its card. That row is dropped and `skip` tells
  * the mouse patch how many rows Pi still counts above the body.
  *
  * Images are the exception: the caption and the image stay outside the card.
  * Their rows cannot be clipped, painted or wrapped, so they are shifted to the
- * text column with plain padding only, and the blank rows an image covers stay
- * empty because the TUI counts them.
- * If Pi drew no graphics row at all the caller gets `passthrough`.
+ * text column with plain padding only, and the rows an image covers stay
+ * exactly as pi drew them because the TUI counts them.
+ * When pi's image rows are not where its own components report them, the caller
+ * gets `passthrough` and the block stays at full width.
  */
 export interface NestedResult {
 	lines: string[];
@@ -137,65 +179,61 @@ export interface NestedResult {
 	skip: number;
 	/** The first body row is Pi's top padding, which the status strip replaces. */
 	blankTop: boolean;
-	/** The block has images but drew no graphics row: never indent or clip it. */
+	/** Pi's image rows could not be located: never indent or clip the block. */
 	passthrough?: boolean;
-}
-
-/** The rows one image occupies: kitty starts at the sequence, iTerm2 ends on it. */
-interface ImageSpan {
-	start: number;
-	end: number;
 }
 
 export function nestResult(
 	native: string[],
 	theme: ThemeLike | undefined,
 	width: number,
-	images: boolean,
+	runs: readonly ImageRun[] | null,
 	last: boolean,
 	card: string,
-	labels?: readonly string[],
+	padLeft: number,
 ): NestedResult {
 	if (!theme) return { lines: native, indent: 0, skip: 0, blankTop: false };
 	const skip = native[0] === "" ? 1 : 0;
 	const body = skip === 1 ? native.slice(1) : native;
-	const blankTop = body.length > 0 && isBlankRow(body[0] ?? "");
-	const spans = images ? imageSpans(body) : [];
-	if (images && spans.length === 0) {
-		return { lines: body, indent: 0, skip, blankTop, passthrough: true };
+	const spans = runs === null ? undefined : imageSpans(body, runs);
+	if (spans === undefined) {
+		return { lines: body, indent: 0, skip, blankTop: false, passthrough: true };
 	}
 	const graphics = new Set<number>();
 	for (const span of spans) {
 		for (let index = span.start; index <= span.end; index++) graphics.add(index);
 	}
+	// Pi's top padding row is where the status strip goes — unless an image
+	// already starts there.
+	const blankTop = body.length > 0 && isBlankRow(body[0] ?? "") && !graphics.has(0);
 	const captions = new Map<number, string>();
-	for (let i = 0; i < spans.length; i++) {
-		const span = spans[i];
-		const label = labels?.[i];
-		if (!span || !label) continue;
-		if (span.start > 0 && isBlankRow(body[span.start - 1] ?? "")) captions.set(span.start - 1, label);
+	for (const span of spans) {
+		if (span.label === undefined) continue;
+		if (span.start > 0 && isBlankRow(body[span.start - 1] ?? "")) captions.set(span.start - 1, span.label);
 	}
+	const indent = cardIndent(padLeft);
+	const pad = indent - CHILD_INDENT;
 	const prefix = theme.fg("muted", last ? CHILD_CLOSED : CHILD_GUTTER);
-	const pad = theme.bg(card, " ".repeat(CARD_PAD));
+	const cardPad = theme.bg(card, " ".repeat(pad));
 	// The caption and the image stay outside the card: their rows cannot be
 	// painted or clipped, so they only get plain padding up to the text column.
-	const outside = " ".repeat(CARD_PAD + 1);
-	const inner = Math.max(0, width - CARD_INDENT);
+	const outside = " ".repeat(pad + padLeft);
+	const inner = Math.max(0, width - indent);
 	const outsideInner = Math.max(0, width - CHILD_INDENT - outside.length);
 	return {
 		lines: body.map((line, index) => {
 			const caption = captions.get(index);
-			if (caption) {
+			if (caption !== undefined) {
 				const text = `${theme.fg("accent", imageGlyph())} ${theme.fg("muted", caption)}`;
 				return `${prefix}${outside}${truncateToWidth(text, outsideInner, "…")}`;
 			}
-			if (graphics.has(index)) {
-				return isImageLine(line) ? `${prefix}${outside}${line}` : line;
-			}
-			if (visibleWidth(line) === 0) return `${prefix}${pad}${theme.bg(card, " ".repeat(inner))}`;
-			return `${prefix}${pad}${truncateToWidth(line, inner, "…")}`;
+			// The rows an image covers keep exactly what pi drew: a gutter written
+			// there would land on the image.
+			if (graphics.has(index)) return line === "" ? line : `${prefix}${outside}${line}`;
+			if (visibleWidth(line) === 0) return `${prefix}${cardPad}${theme.bg(card, " ".repeat(inner))}`;
+			return `${prefix}${cardPad}${truncateToWidth(line, inner, "…")}`;
 		}),
-		indent: CARD_INDENT,
+		indent,
 		skip,
 		blankTop,
 	};
@@ -222,49 +260,57 @@ export function formatDuration(ms: number): string {
 	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+/** One image inside pi's block: the rows it covers and the caption for the row above. */
+interface ImageSpan {
+	start: number;
+	end: number;
+	label?: string;
+}
+
 /**
- * The row spans of one nested block that belong to terminal graphics.
+ * Where the images sit in pi's block, from the components pi drew them with.
  *
- * Kitty puts the sequence on the first row it covers and pads the rest with
- * blank rows; iTerm2 puts it on the last row and reserves the blanks above.
- * Writing a gutter into those rows would paint over the image.
+ * Pi appends every image, one `Spacer(1)` row ahead of it, so the block ends
+ * with the images in order and their row counts walk backwards from the end.
+ * Every row of a span must be control-only — a blank row reserved for the image
+ * plus the single row that carries the sequence — and exactly one row must
+ * carry it. Anything else means pi lays its images out differently now, and
+ * the caller leaves the block untouched.
+ *
+ * Kitty puts the sequence on the first row it covers and reserves the blanks
+ * after it; iTerm2 puts it on the last row, under a cursor-up prefix.
  */
-function imageSpans(native: readonly string[]): ImageSpan[] {
+function imageSpans(body: readonly string[], runs: readonly ImageRun[]): ImageSpan[] | undefined {
+	if (runs.length === 0) return [];
 	const spans: ImageSpan[] = [];
-	for (let i = 0; i < native.length; i++) {
-		const line = native[i] ?? "";
-		if (!isImageLine(line)) continue;
-		const covered = kittyRows(line) || (line.includes(KITTY_PREFIX) ? 1 : 0);
-		if (covered > 0) {
-			spans.push({ start: i, end: Math.min(native.length, i + covered) - 1 });
-			continue;
+	let cursor = body.length;
+	for (let index = runs.length - 1; index >= 0; index--) {
+		const rows = runs[index]?.rows ?? 0;
+		if (!Number.isInteger(rows) || rows < 1 || rows > cursor) return undefined;
+		const start = cursor - rows;
+		const span = { start, end: cursor - 1, label: runs[index]?.label };
+		if (!holdsGraphics(body, span)) return undefined;
+		spans.unshift(span);
+		cursor = start;
+		if (index > 0) {
+			// One `Spacer(1)` row above every image: consuming it keeps the image
+			// above aligned as well.
+			if (cursor < 1 || body[cursor - 1] !== "") return undefined;
+			cursor--;
 		}
-		let start = i;
-		for (let row = i - 1; row >= 0 && (native[row] ?? "") === ""; row--) start = row;
-		spans.push({ start, end: i });
 	}
 	return spans;
 }
 
-/** Rows a kitty sequence covers, `0` when this line is not a kitty sequence. */
-function kittyRows(line: string): number {
-	const start = line.indexOf(KITTY_PREFIX);
-	if (start < 0) return 0;
-	const end = line.indexOf(";", start);
-	if (end < 0) return 0;
-	// Only the parameter list: base64 payload can contain `r=` by accident.
-	const match = /(?:^|,)r=(\d+)(?:,|$)/.exec(line.slice(start + KITTY_PREFIX.length, end));
-	const rows = match ? Number(match[1]) : 0;
-	return Number.isInteger(rows) && rows > 1 ? rows : 0;
-}
-
-/**
- * Mirror of pi-tui's `isImageLine`, which the package does not export: the
- * sequence starts the row (kitty, iTerm2) or follows a cursor-up prefix
- * (multi-row iTerm2).
- */
-function isImageLine(line: string): boolean {
-	return line.includes(KITTY_PREFIX) || line.includes(ITERM2_PREFIX);
+/** Every row of the span is control-only, and exactly one of them draws the image. */
+function holdsGraphics(body: readonly string[], span: ImageSpan): boolean {
+	let sequences = 0;
+	for (let index = span.start; index <= span.end; index++) {
+		const line = body[index] ?? "";
+		if (visibleWidth(line) !== 0) return false;
+		if (line !== "") sequences++;
+	}
+	return sequences === 1;
 }
 
 /** `▦` in the same geometric-shapes set as `▸`/`✻`; `#` if it ever measures wide. */

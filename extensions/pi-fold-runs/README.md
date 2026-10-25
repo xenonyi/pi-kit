@@ -57,6 +57,7 @@ Pi 每个模型 step 都是独立的 assistant 消息，**只思考（+ 调工�
 ```json
 {
   "enabled": true,
+  "autoDisableOnUnknownVersion": true,
   "pinned": ["ask_user_question"],
   "showRunning": true,
   "showErrors": true,
@@ -67,23 +68,34 @@ Pi 每个模型 step 都是独立的 assistant 消息，**只思考（+ 调工�
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 总开关；`false` 时完全交回 Pi 渲染 |
+| `autoDisableOnUnknownVersion` | `true` | 运行的 Pi 不在受测版本行（`1.4.x`）时直接交回 Pi 渲染；确认新版没问题后设成 `false` 可强制保持折叠 |
 | `pinned` | `["ask_user_question"]` | 永不折叠的工具名；同时切断当前分组 |
 | `showRunning` | `true` | 摘要行里显示 `running <tool>` |
 | `showErrors` | `true` | 折叠态为每个失败调用保留一行 |
 | `gap` | `1` | 组上方的空行数（0–4）；下方自动少 1 行（下一条消息自带 1 行间距），两侧看起来才一样宽 |
 
-配置在会话开始时读取，改动后运行 `/reload` 或重开会话。`/fold` 显示当前生效范围和使用的配置文件。配置写错时整份配置被忽略并提示，回退到默认值。
+配置在会话开始时读取，改动后运行 `/reload` 或重开会话。`/fold` 显示当前生效范围、运行的 Pi 版本、结构探针是否已把补丁关掉，以及使用的配置文件。配置写错时整份配置被忽略并提示，回退到默认值。
+
+## 版本护栏
+
+这个扩展依赖 Pi 组件的内部结构（见下方「实现方式」和「限制」），而 Pi 的组件不是公开 API，`tsc` 也看不到这些字段——所有访问都走本地接口。所以三件事一起做：
+
+1. **受测版本行**：`src/version.ts` 声明 `1.4.x`。启动时用 Pi 导出的 `VERSION` 比对 major.minor；不在这一行就提示，并按 `autoDisableOnUnknownVersion` 直接交回 Pi 渲染（默认开）。
+2. **结构探针**：渲染前检查真正读的字段还在（`toolName`/`isPartial` 的类型、`setExpanded`、`ui.requestRender`、`lastMessage` 的形状）。任一项不符就整个进程关掉折叠并记下原因，`/fold` 会显示它。
+3. **退化优先**：探针通过但布局对不上时，一律交回 Pi 原生渲染（例如图片行位置对不上），不做「猜着画」。
+
+升级 Pi 后建议的检查顺序：`/fold` 是否报 untested → 展开一张卡看卡内文字是否与调用行同列 → 有图片的结果是否整块正常 → `Ctrl+O` 与点击是否还正常。
 
 ## 实现方式
 
 Pi 没有 assistant/消息级的渲染扩展点（`registerToolRenderer` 只管工具的 call/result，`registerMessageRenderer` 只对自定义消息生效）。所以这个扩展和 pi-tidy 一样，直接包了两个组件的 `prototype.render`：
 
-- `ToolExecutionComponent` —— 每个工具调用一个实例。折叠态只由组内第一个成员画摘要行与失败行；组展开后，**未展开**的调用画自己的一行；某个调用展开后把 Pi 的原生 `render`（按内宽重排）接在下面，再把 Pi 的顶部 padding 行替换成状态条（` ├ ▾` + 异常状态，兼作收起热区）；卡底色缩进 3 列、树干在卡外，卡内文字额外缩进 1 列与调用名对齐；图片序列行与图注在卡外，按文字列偏移（图注尺寸读自 `imageComponents`）；相邻卡之间插一行普通树干分隔。
+- `ToolExecutionComponent` —— 每个工具调用一个实例。折叠态只由组内第一个成员画摘要行与失败行；组展开后，**未展开**的调用画自己的一行；某个调用展开后把 Pi 的原生 `render`（按内宽重排）接在下面，再把 Pi 的顶部 padding 行替换成状态条（` ├ ▾` + 异常状态，兼作收起热区）；树干在卡外，卡内文字与调用名同列——**缩进量不写死**：优先读 Pi 的 `outputPad`（0 或 1），字段没了就从 Pi 自己渲染出的行首空白推断，必要时按修正后的宽度再渲染一次；图片序列行与图注在卡外，按文字列偏移（图注尺寸读自 `imageComponents[].dimensions`，占几行读自该组件的 `render`）；相邻卡之间插一行普通树干分隔。
 - `AssistantMessageComponent` —— 负责一段思考。carrier 消息折叠态返回 `[]`，并把 thinking 段数记进当前组；有文本时作为边界。
 - `ToolExecutionComponent.prototype.handleMouse` —— 摘要行翻转整组，调用行翻转该调用的结果，结果块坐标平移后交回 Pi；转发期间开 pointer 作用域，让 `setExpanded` 补丁分清 `Ctrl+O` 和单行点击。
 - `UserMessageComponent`、`CustomMessageComponent`、`BashExecutionComponent`、`SkillInvocationMessageComponent`、`CompactionSummaryMessageComponent`、`BranchSummaryMessageComponent` —— 只标记边界，输出原样透传。
 
-两个组件类都是 `@earendil-works/pi-coding-agent` 的公开导出，且 Pi 的扩展加载器把这个包名别名到宿主自己的模块实例，所以打原型能作用到正在运行的 transcript。原型只补一次，配置存在 `Symbol.for("pi-fold-runs:runtime")` 的全局槽里，`/reload` 能作用到已经装好的补丁。
+两个组件类都是 `@earendil-works/pi-coding-agent` 的公开导出，且 Pi 的扩展加载器把这个包名别名到宿主自己的模块实例，所以打原型能作用到正在运行的 transcript。原型只补一次，配置存在 `Symbol.for("pi-fold-runs:runtime")` 的全局槽里，`/reload` 能作用到已经装好的补丁；探针失败的原因存在 `Symbol.for("pi-fold-runs:shape-problem")`，`/fold` 报得出来。
 
 分组在渲染时从 transcript 顺序推导，不持久化：重开会话时组件按同样顺序重建，分组自然一致。
 
@@ -93,8 +105,9 @@ Pi 没有 assistant/消息级的渲染扩展点（`registerToolRenderer` 只管�
 - **没有 hover 反馈**：摘要行是纯文本，鼠标移上去不会高亮。
 - **展开的成功调用没有自绘耗时**：折叠行才有 `0.2s`；展开后状态条只标失败/运行中/图片，耗时看 shell 卡内的 `Took …`（read/grep 等没有耗时）。
 - **折叠行是自绘的**：未展开的调用行由本扩展排版（`工具名 + key=value 预览`），看不到某些工具自定义的 call 细节；展开后就是 Pi 原生卡，细节都在。
-- **图片行只做有限适配**：图注和图片都在卡外，按卡内文字列偏移（5 列），与文字对齐；但图片占用的行必须是空行（TUI 靠它们计算图片高度），所以树干在图片高度内断开、图片背后也不可能有卡底色（会盖住图）。图注尺寸读自 `imageComponents[].dimensions`（缺尺寸时只写 `image`，读不到组件时保留空白行）；识别图片行靠 `\x1b_G`（kitty）与 `\x1b]1337;File=`（iTerm2）前缀——`pi-tui` 没有公开 `isImageLine`，这里是本地镜像，上游换协议或改图片行前缀处理时会失效；如果结果确实含图片却整块没有一行命中，则退回「整块不缩进」（并 console.debug 一次）。
-- **依赖内部字段**：`lastMessage`、`isStreaming`、`args`、`showImages`、`result.content`、`result.durationMs`、`imageComponents`、`hideComponent`、`expanded` 都不是公开 API。Pi 改内部结构时按「不认识就当边界、绝不隐藏」兜底，最坏退化成不折叠。
+- **图片行只做有限适配**：图注和图片都在卡外，按卡内文字列偏移，与文字同列；但图片占用的行必须是空行（TUI 靠它们计算图片高度），所以树干在图片高度内断开、图片背后也不可能有卡底色（会盖住图）。占几行不再解析转义序列，而是问 Pi 自己的图片组件（`imageComponents[i].render(width).length`）；每张图的区域必须「整段都是控制行、且只有一行带图形序列」，对不上就整块不缩进（`passthrough` + 一次 console.debug）——宁可不动，也不涂到图上。图注尺寸读自 `imageComponents[].dimensions`（缺尺寸时只写 `image`）。
+- **依赖内部字段**：`lastMessage`、`args`、`showImages`、`outputPad`、`result.content`、`result.durationMs`、`imageComponents`、`hideComponent`、`expanded` 都不是公开 API。渲染前有一次结构探针（`toolName`/`isPartial` 的类型、`setExpanded`、`ui.requestRender`、`lastMessage` 的形状），任一项不符就**整个进程退回 Pi 原生渲染**并记下原因（`/fold` 可见）——这比把 `undefined` 画进行里好。
+- **版本护栏只覆盖 major.minor**：`1.4.x` 的补丁级更新视为兼容；Pi 的组件结构一变就靠结构探针兜底（探针失败 = 不折叠，不崩溃）。
 - **点击来源靠转发路径识别**：`handleMouse` 把原生行事件交给 Pi 时开一个 pointer 作用域，`setExpanded` 补丁据此区分 `Ctrl+O` 和单行点击。如果 Pi 改成像 `MouseRegion` 回调那样绕开 `ToolExecutionComponent.handleMouse`，标记不会置位，退化回「点调用行整组收起」的老行为（不崩溃）。
 - **`Ctrl+O` 的全局标志是 Pi 自己的**：点行展开/收起不会同步它，所以点过之后第一次 `Ctrl+O` 可能表现为「全开」。
 - 被 `pinned` 工具切断的那一步，它的 thinking 仍计入前一组（展开那一组能看到）。
@@ -111,7 +124,8 @@ extensions/pi-fold-runs/
 │   ├── state.ts       # 分组状态机（边界、carrier、摘要数据）
 │   ├── format.ts      # 摘要行、折叠行、状态条、图注、结果缩进、失败行
 │   ├── patches.ts     # 组件原型补丁（render/handleMouse/setExpanded）与边界包装
-│   ├── runtime.ts     # 全局配置槽（/reload 可见）
+│   ├── runtime.ts     # 全局配置槽与探针结果（/reload 可见）
+│   ├── version.ts     # 运行中的 Pi 版本与受测版本行
 │   └── theme.ts       # 读取 Pi 的活动主题
 └── README.md
 ```

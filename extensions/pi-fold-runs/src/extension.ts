@@ -1,8 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadFoldConfig } from "./config.ts";
 import { installPatches } from "./patches.ts";
-import { getRuntime, setRuntime } from "./runtime.ts";
+import { getRuntime, getShapeProblem, setRuntime } from "./runtime.ts";
 import { resetState } from "./state.ts";
+import { checkPiVersion, TESTED_LINE } from "./version.ts";
 
 /**
  * Fold one assistant segment's thinking and tool calls into a single summary
@@ -25,8 +26,19 @@ import { resetState } from "./state.ts";
 export default function foldRuns(pi: ExtensionAPI): void {
 	const applyConfig = (ctx: ExtensionContext) => {
 		const loaded = loadFoldConfig(ctx.cwd, ctx.isProjectTrusted());
-		setRuntime({ config: loaded.config, source: loaded.source });
+		const version = checkPiVersion();
+		// The patches reach into pi's own components: on a pi line they were not
+		// written against, prefer pi's rows over a transcript that may be wrong.
+		const disabledByVersion = !version.supported && loaded.config.autoDisableOnUnknownVersion;
+		setRuntime({
+			config: disabledByVersion ? { ...loaded.config, enabled: false } : loaded.config,
+			source: loaded.source,
+			version,
+		});
 		if (loaded.warning) ctx.ui.notify(loaded.warning, "warning");
+		if (loaded.config.enabled && !version.supported) {
+			ctx.ui.notify(versionWarning(version.raw, disabledByVersion), "warning");
+		}
 	};
 
 	pi.on("session_start", (_event, ctx) => {
@@ -41,13 +53,29 @@ export default function foldRuns(pi: ExtensionAPI): void {
 	pi.registerCommand("fold", {
 		description: "Show tool-group folding settings",
 		handler: async (_args, ctx) => {
-			ctx.ui.notify(describe(), getRuntime().config.enabled ? "info" : "warning");
+			const healthy = getRuntime().config.enabled && getShapeProblem() === undefined;
+			ctx.ui.notify(describe(), healthy ? "info" : "warning");
 		},
 	});
 }
 
 function describe(): string {
-	const { config, source } = getRuntime();
+	const { config, source, version } = getRuntime();
 	const pinned = config.pinned.length > 0 ? `, pinned ${config.pinned.join(", ")}` : "";
-	return `Fold runs ${config.enabled ? "on" : "off"}${pinned} · settings: ${source ?? "built-in defaults"} · expand with Ctrl+O`;
+	const parts = [`Fold runs ${config.enabled ? "on" : "off"}${pinned}`];
+	if (version) {
+		parts.push(`pi ${version.raw}${version.supported ? "" : ` (untested, expected ${TESTED_LINE})`}`);
+	}
+	const problem = getShapeProblem();
+	if (problem) parts.push(`pi's component shape changed: ${problem}`);
+	parts.push(`settings: ${source ?? "built-in defaults"}`, "expand with Ctrl+O");
+	return parts.join(" · ");
+}
+
+/** An untested pi is reported; `autoDisableOnUnknownVersion` decides whether it is also obeyed. */
+function versionWarning(raw: string, disabled: boolean): string {
+	const head = `pi-fold-runs: pi ${raw} is outside the tested ${TESTED_LINE}`;
+	return disabled
+		? `${head}; folding is off. Check the transcript, then set autoDisableOnUnknownVersion: false to turn it back on.`
+		: `${head}; folding stays on, but check the transcript.`;
 }
