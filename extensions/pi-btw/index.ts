@@ -20,11 +20,13 @@ import {
     buildSessionContext,
     convertToLlm,
     DynamicBorder,
+    getMarkdownTheme,
 } from "@earendil-works/pi-coding-agent";
 import {
     type Component,
     Container,
     Key,
+    Markdown,
     matchesKey,
     Spacer,
     Text,
@@ -249,7 +251,7 @@ class BtwPanel implements Component {
             ),
         );
         body.addChild(new Spacer(1));
-        body.addChild(new Text(this.answer, padding, 0));
+        body.addChild(new Markdown(this.answer, padding, 0, getMarkdownTheme()));
         return body.render(width);
     }
 
