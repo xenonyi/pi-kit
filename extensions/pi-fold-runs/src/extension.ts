@@ -24,6 +24,7 @@ import { checkPiVersion, TESTED_LINE } from "./version.ts";
  * empty because the TUI counts them, so nothing is clipped or painted over.
  */
 export default function foldRuns(pi: ExtensionAPI): void {
+	let activated = false;
 	const applyConfig = (ctx: ExtensionContext) => {
 		const loaded = loadFoldConfig(ctx.cwd, ctx.isProjectTrusted());
 		const version = checkPiVersion();
@@ -42,20 +43,23 @@ export default function foldRuns(pi: ExtensionAPI): void {
 	};
 
 	pi.on("session_start", (_event, ctx) => {
+		if (ctx.mode !== "tui") return;
+
 		resetState();
 		applyConfig(ctx);
-	});
-	pi.on("session_tree", () => resetState());
-	pi.on("session_shutdown", () => resetState());
+		if (activated) return;
 
-	installPatches();
-
-	pi.registerCommand("fold", {
-		description: "Show tool-group folding settings",
-		handler: async (_args, ctx) => {
-			const healthy = getRuntime().config.enabled && getShapeProblem() === undefined;
-			ctx.ui.notify(describe(), healthy ? "info" : "warning");
-		},
+		installPatches();
+		pi.on("session_tree", () => resetState());
+		pi.on("session_shutdown", () => resetState());
+		pi.registerCommand("fold", {
+			description: "Show tool-group folding settings",
+			handler: async (_args, ctx) => {
+				const healthy = getRuntime().config.enabled && getShapeProblem() === undefined;
+				ctx.ui.notify(describe(), healthy ? "info" : "warning");
+			},
+		});
+		activated = true;
 	});
 }
 

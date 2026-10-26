@@ -59,6 +59,15 @@ const AskUserQuestionParams = Type.Object({
 });
 
 export default function askUserQuestion(pi: ExtensionAPI) {
+    let registered = false;
+    pi.on("session_start", (_event, ctx) => {
+        if (ctx.mode !== "tui" || registered) return;
+        registerQuestionTool(pi);
+        registered = true;
+    });
+}
+
+function registerQuestionTool(pi: ExtensionAPI) {
     pi.registerTool({
         name: "ask_user_question",
         label: "ask_user_question",
@@ -92,20 +101,11 @@ export default function askUserQuestion(pi: ExtensionAPI) {
                 return cancelledResult(params.question, mode, context);
             }
 
-            if (!ctx.hasUI) {
+            if (ctx.mode !== "tui" || !ctx.hasUI) {
                 return unavailableResult(
                     params.question,
                     mode,
-                    "ask_user_question requires interactive mode UI",
-                    context,
-                );
-            }
-
-            if (mode !== "text" && ctx.mode !== "tui") {
-                return unavailableResult(
-                    params.question,
-                    mode,
-                    "ask_user_question option selection requires TUI mode",
+                    "ask_user_question requires TUI mode",
                     context,
                 );
             }
