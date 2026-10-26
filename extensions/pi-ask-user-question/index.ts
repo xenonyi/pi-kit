@@ -58,16 +58,34 @@ const AskUserQuestionParams = Type.Object({
     ),
 });
 
+/** Only a TUI session declares the tool; every other mode hides it. */
+type QuestionToolExposure = "model-only" | "hidden";
+
 export default function askUserQuestion(pi: ExtensionAPI) {
-    let registered = false;
+    // Tools cannot be unregistered, so the exposure is re-applied for every
+    // session: only a session that can show the prompt declares the tool.
+    // Re-registering (instead of setActiveTools) leaves tools a resumed
+    // transcript restored but that have not registered yet still pending,
+    // such as MCP servers that are still connecting.
+    let exposure: QuestionToolExposure | undefined;
+    const applyExposure = (next: QuestionToolExposure) => {
+        if (exposure === next) return;
+        exposure = next;
+        registerQuestionTool(pi, next);
+    };
+
+    // Nothing is declared until a session confirms it can ask the user.
+    applyExposure("hidden");
+
     pi.on("session_start", (_event, ctx) => {
-        if (ctx.mode !== "tui" || registered) return;
-        registerQuestionTool(pi);
-        registered = true;
+        applyExposure(ctx.mode === "tui" && ctx.hasUI ? "model-only" : "hidden");
     });
 }
 
-function registerQuestionTool(pi: ExtensionAPI) {
+function registerQuestionTool(
+    pi: ExtensionAPI,
+    exposure: QuestionToolExposure,
+) {
     pi.registerTool({
         name: "ask_user_question",
         label: "ask_user_question",
@@ -83,7 +101,7 @@ function registerQuestionTool(pi: ExtensionAPI) {
         parameters: AskUserQuestionParams,
         // User interaction must stay directly available, even in codemode-only mode.
         // Scripts and other tools must not trigger blocking prompts indirectly.
-        exposure: "model-only",
+        exposure,
         // Blocking prompts must not overlap with sibling tool calls.
         executionMode: "sequential",
 

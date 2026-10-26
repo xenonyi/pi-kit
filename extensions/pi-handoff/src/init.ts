@@ -100,7 +100,11 @@ export function registerHandoffInitialization(pi: ExtensionAPI): void {
 
 	let commandRegistered = false;
 	pi.on("session_start", (_event, ctx) => {
-		if (ctx.mode !== "tui" || commandRegistered || typeof pi.getFlag(INIT_FLAG) !== "string") return;
+		// Re-checked for every session: the command is only reachable from a TUI
+		// session started with the one-shot flag. Commands cannot be unregistered,
+		// so the registration itself happens once.
+		if (ctx.mode !== "tui" || typeof pi.getFlag(INIT_FLAG) !== "string") return;
+		if (commandRegistered) return;
 		registerInitializeCommand();
 		commandRegistered = true;
 	});

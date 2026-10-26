@@ -30,7 +30,6 @@ export interface ToolBox {
 	/** Raw arguments, read only to build the row's one-line preview. */
 	args?: unknown;
 	/** Pi's own switch for terminal graphics (`false` keeps images textual). */
-	/** Pi's own switch for terminal graphics (`false` keeps images textual). */
 	showImages?: boolean;
 	/** Pi's horizontal padding inside the card (`outputPad`: 0 or 1). */
 	outputPad?: number;
