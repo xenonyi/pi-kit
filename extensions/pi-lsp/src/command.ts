@@ -48,7 +48,9 @@ export function resolveCommandPath(
 	platform: NodeJS.Platform = process.platform,
 	pathValue = process.env.PATH ?? "",
 ) {
-	const extensions = platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+	// Windows resolves PATHEXT candidates first: the bare name is often a POSIX
+	// shim (for example from pnpm) that spawn cannot execute directly.
+	const extensions = platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
 	if (command.includes("/") || command.includes("\\")) {
 		const commandPath = path.isAbsolute(command) ? command : path.resolve(cwd, command);
 		return resolveRunnableFile(commandPath, extensions, platform);
