@@ -8,7 +8,8 @@ export function parseHandoffArgs(args: string): { destination: HandoffDestinatio
 	let destination: HandoffDestination = "tab";
 	let selected = false;
 	while (rest.startsWith("--")) {
-		const match = /^(\S+)(?:\s+|$)/.exec(rest)!;
+		const match = /^(\S+)(?:\s+|$)/.exec(rest);
+		if (!match) throw new Error(HANDOFF_USAGE);
 		const flag = match[1];
 		rest = rest.slice(match[0].length).trimStart();
 		if (flag === "--") break;

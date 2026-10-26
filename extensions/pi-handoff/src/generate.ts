@@ -1,7 +1,7 @@
 /** Schema-constrained extraction only; no tool is actually executed. */
-import { type Context, type Model, type Api, type Tool, uuidv7 } from "@earendil-works/pi-ai";
+import { type Api, type Context, type Model, type Tool, uuidv7 } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createHandoffData, HandoffContentSchema, validateHandoffGoal, type HandoffData } from "./data.ts";
+import { createHandoffData, HandoffContentSchema, type HandoffData, validateHandoffGoal } from "./data.ts";
 
 const MAX_ATTEMPTS = 2;
 const GENERATION_TIMEOUT_MS = 120_000;

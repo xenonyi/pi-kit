@@ -1,12 +1,20 @@
 /** Read-only literal preview, with schema-validated JSON editing on demand. */
 import {
-	type ExtensionCommandContext, DynamicBorder, ExtensionEditorComponent, getMarkdownTheme,
+	DynamicBorder,
+	type ExtensionCommandContext,
+	ExtensionEditorComponent,
+	getMarkdownTheme,
 } from "@earendil-works/pi-coding-agent";
 import {
-	Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi,
-	type MarkdownTheme, type TuiMouseEvent,
+	Key,
+	type MarkdownTheme,
+	matchesKey,
+	type TuiMouseEvent,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { HANDOFF_INTRO, handoffSections, validateHandoffData, type HandoffData } from "./data.ts";
+import { HANDOFF_INTRO, type HandoffData, handoffSections, validateHandoffData } from "./data.ts";
 import type { HandoffDestination } from "./options.ts";
 
 export const PANEL_RESERVED_ROWS = 2;
@@ -120,9 +128,18 @@ export async function reviewHandoff(
 				},
 				handleInput(input: string): void {
 					if (!isValid() || operation.cancelUI !== cancelUI) return;
-					if (kb.matches(input, "tui.select.cancel")) return cancelUI();
-					if (kb.matches(input, "tui.select.confirm")) return finish("accept");
-					if (matchesKey(input, Key.ctrl("e"))) return finish("edit");
+					if (kb.matches(input, "tui.select.cancel")) {
+						cancelUI();
+						return;
+					}
+					if (kb.matches(input, "tui.select.confirm")) {
+						finish("accept");
+						return;
+					}
+					if (matchesKey(input, Key.ctrl("e"))) {
+						finish("edit");
+						return;
+					}
 					if (kb.matches(input, "tui.select.up") || matchesKey(input, "k")) offset--;
 					else if (kb.matches(input, "tui.select.down") || matchesKey(input, "j")) offset++;
 					else if (matchesKey(input, Key.pageUp)) offset -= viewport;

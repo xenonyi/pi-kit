@@ -1,6 +1,6 @@
 /** Versioned handoff contract shared by generation, review, storage, and delivery. */
 import { StringEnum } from "@earendil-works/pi-ai";
-import { Type, type Static, type TSchema } from "typebox";
+import { type Static, type TSchema, Type } from "typebox";
 import { Check, Errors } from "typebox/value";
 
 const MAX_DATA_BYTES = 256 * 1024;
@@ -43,6 +43,7 @@ export type HandoffData = Static<typeof HandoffDataSchema>;
 
 function checkStrings(value: unknown): void {
 	if (typeof value === "string") {
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: unprintable input is rejected on purpose
 		if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) {
 			throw new Error("Handoff data contains unsupported control characters");
 		}
@@ -104,7 +105,7 @@ export function validateHandoffData(value: unknown, expectedGoal?: string): Hand
  */
 function markdown(value: string, escaped: boolean): string {
 	const normalized = value.replace(/\r\n?/g, "\n");
-	return escaped ? normalized.replace(/[\\`*_{}\[\]<>()#!|~.+\-]/g, "\\$&") : normalized;
+	return escaped ? normalized.replace(/[\\`*_{}[\]<>()#!|~.+-]/g, "\\$&") : normalized;
 }
 
 function list(values: readonly string[], ordered = false, escaped = false): string {

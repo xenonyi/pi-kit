@@ -221,6 +221,7 @@ function registerQuestionTool(pi: ExtensionAPI) {
                             `${answer.index}. ${answer.label}`,
                         );
                 }
+                return "";
             });
             return new Text(lines.join("\n"), 0, 0);
         },

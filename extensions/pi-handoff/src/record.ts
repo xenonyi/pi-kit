@@ -14,7 +14,7 @@ import type {
 	Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, sliceByColumn, Text, visibleWidth } from "@earendil-works/pi-tui";
-import { validateHandoffData, type HandoffData } from "./data.ts";
+import { type HandoffData, validateHandoffData } from "./data.ts";
 
 /** Custom session entry type used to store handoff provenance. */
 export const HANDOFF_ENTRY_TYPE = "pi-handoff";
@@ -61,6 +61,7 @@ export type HandoffCardLine =
 /** Collapse to one line and drop control characters that could disturb rendering. */
 function singleLine(text: string): string {
 	return text
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: controls would disturb rendering
 		.replace(/[\u0000-\u001f\u007f]+/g, " ")
 		.replace(/ {2,}/g, " ")
 		.trim();

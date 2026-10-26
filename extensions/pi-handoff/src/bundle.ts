@@ -5,8 +5,8 @@ import { chmod, lstat, mkdir, open, readdir, realpath, rename, rm } from "node:f
 import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import type { HandoffRecordData } from "./record.ts";
 import { assertHandoffDraft } from "./data.ts";
+import type { HandoffRecordData } from "./record.ts";
 
 const execFileAsync = promisify(execFile);
 const ID_PATTERN = /^[a-f0-9]{64}$/;

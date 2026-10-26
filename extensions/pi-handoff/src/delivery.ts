@@ -1,7 +1,8 @@
 /** Source-side orchestration; the caller retains the reviewed draft until delivery settles. */
+
+import type { HandoffPayload, HandoffStore } from "./bundle.ts";
+import type { HerdrClient, HerdrTarget } from "./herdr.ts";
 import type { HandoffDestination } from "./options.ts";
-import { HandoffStore, type HandoffPayload } from "./bundle.ts";
-import { HerdrClient, type HerdrTarget } from "./herdr.ts";
 import { deriveSessionName } from "./record.ts";
 
 export async function deliverHandoff(options: {

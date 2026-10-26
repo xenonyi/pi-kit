@@ -1,8 +1,8 @@
 /** Target-only bootstrap. Lifecycle handlers never call newSession themselves. */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { HandoffStore, type HandoffPackage } from "./bundle.ts";
-import { openHandoffSession, type HandoffSessionContext } from "./session.ts";
+import { type HandoffPackage, HandoffStore } from "./bundle.ts";
 import { INIT_FLAG, STORE_FLAG } from "./herdr.ts";
+import { type HandoffSessionContext, openHandoffSession } from "./session.ts";
 
 export const INITIALIZE_COMMAND = "pi-handoff-initialize";
 
@@ -20,7 +20,8 @@ export function registerHandoffInitialization(pi: ExtensionAPI): void {
 		if (event.reason === "startup" && ctx.mode === "tui" && typeof pi.getFlag(INIT_FLAG) === "string") startupContext = ctx;
 	});
 	pi.on("resources_discover", () => {
-		if (!startupContext || bootstrap || invoked) return;
+		const ctx = startupContext;
+		if (!ctx || bootstrap || invoked) return;
 		// Dispatch out of lifecycle handlers, after session_start has completed.
 		// No CLI initialMessage exists: if this extension fails to load, no message
 		// of any kind is submitted. Only a registered command is dispatched here.
@@ -28,7 +29,7 @@ export function registerHandoffInitialization(pi: ExtensionAPI): void {
 			bootstrap = undefined;
 			if (invalidated) return;
 			if (!pi.getCommands().some((command) => command.name === INITIALIZE_COMMAND)) {
-				startupContext!.ui.notify("Handoff initializer is unavailable. No prompt was sent.", "error");
+				ctx.ui.notify("Handoff initializer is unavailable. No prompt was sent.", "error");
 				return;
 			}
 			pi.sendUserMessage(`/${INITIALIZE_COMMAND}`, { expandPromptTemplates: true });

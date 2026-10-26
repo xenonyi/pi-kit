@@ -32,6 +32,7 @@ function object(value: unknown): Record<string, unknown> {
 
 function field(value: Record<string, unknown>, name: string): string {
 	const result = value[name];
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are rejected in fields
 	if (typeof result !== "string" || !result || /[\u0000-\u001f\u007f]/.test(result)) throw new Error(`herdr response is missing ${name}`);
 	return result;
 }

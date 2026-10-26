@@ -20,7 +20,13 @@ import {
 	getAgentDir,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
-
+import { HandoffStore } from "./bundle.ts";
+import { type HandoffData, renderHandoffPrompt } from "./data.ts";
+import { deliverHandoff } from "./delivery.ts";
+import { generateHandoff } from "./generate.ts";
+import { HerdrClient, herdrEnvironment } from "./herdr.ts";
+import { registerHandoffInitialization } from "./init.ts";
+import { parseHandoffArgs } from "./options.ts";
 import {
 	buildHandoffRecord,
 	HANDOFF_ENTRY_TYPE,
@@ -28,15 +34,8 @@ import {
 	readHandoffChain,
 	renderHandoffCard,
 } from "./record.ts";
-import { deliverHandoff } from "./delivery.ts";
-import { registerHandoffInitialization } from "./init.ts";
-import { parseHandoffArgs } from "./options.ts";
-import { HandoffStore } from "./bundle.ts";
-import { openHandoffSession } from "./session.ts";
-import { HerdrClient, herdrEnvironment } from "./herdr.ts";
-import { generateHandoff } from "./generate.ts";
-import { renderHandoffPrompt, type HandoffData } from "./data.ts";
 import { reviewHandoff } from "./review.ts";
+import { openHandoffSession } from "./session.ts";
 
 type HandoffResult =
 	| { status: "ok"; handoff: HandoffData }
@@ -197,13 +196,14 @@ export default function handoffExtension(pi: ExtensionAPI) {
 				// Never preload the reviewed draft into this editor: an Enter while
 				// herdr starts the target must not submit it to this session.
 				if (destination !== "here") {
+					if (!herdr) throw new Error("Herdr client is unavailable for this destination");
 					ctx.ui.setStatus("pi-handoff", "Opening handoff in herdr…");
 					try {
 						const target = await deliverHandoff({
 							payload: { ...data, cwd: ctx.cwd, configuration: "target-defaults" },
 							destination,
 							store: new HandoffStore(join(getAgentDir(), "handoffs")),
-							herdr: herdr!,
+							herdr,
 							extension: fileURLToPath(new URL("../index.ts", import.meta.url)),
 							signal: operation.controller.signal,
 							// The draft stays in memory here. Keep the private package

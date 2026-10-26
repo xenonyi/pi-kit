@@ -1,5 +1,5 @@
 import { isUtf8 } from "node:buffer";
-import { constants, type BigIntStats } from "node:fs";
+import { type BigIntStats, constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileRevision, formatLine, staleFile } from "./anchor.ts";
@@ -40,6 +40,7 @@ export interface ReadView {
 }
 
 export function assertText(text: string): void {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: binary input is rejected on purpose
 	if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)) {
 		throw new Error("UNSUPPORTED_TEXT: Binary data and control characters are not supported.");
 	}
@@ -83,23 +84,24 @@ export function encodeText(document: TextDocument): Buffer {
 // Refuse links at every path component, including Windows directory junctions.
 // Do not silently follow a link or break hard-link relationships by renaming.
 export async function inspectPath(path: string): Promise<BigIntStats> {
-	let target: BigIntStats | undefined;
-	for (let current = path; ; current = dirname(current)) {
+	const target = await lstat(path, { bigint: true });
+	if (target.isSymbolicLink()) {
+		throw new Error(`UNSAFE_FILE: Symbolic links and directory junctions are not supported: ${path}`);
+	}
+	if (!target.isFile() || target.nlink !== 1n) {
+		throw new Error(`UNSAFE_FILE: Expected a regular file with exactly one hard link: ${path}`);
+	}
+	for (let current = dirname(path); ; current = dirname(current)) {
 		const state = await lstat(current, { bigint: true });
 		if (state.isSymbolicLink()) {
 			throw new Error(`UNSAFE_FILE: Symbolic links and directory junctions are not supported: ${current}`);
 		}
-		if (current === path) {
-			if (!state.isFile() || state.nlink !== 1n) {
-				throw new Error(`UNSAFE_FILE: Expected a regular file with exactly one hard link: ${path}`);
-			}
-			target = state;
-		} else if (!state.isDirectory()) {
+		if (!state.isDirectory()) {
 			throw new Error(`UNSAFE_FILE: Expected a directory: ${current}`);
 		}
 		if (dirname(current) === current) break;
 	}
-	return target!;
+	return target;
 }
 
 export function sameState(left: BigIntStats, right: BigIntStats): boolean {

@@ -1,5 +1,5 @@
-import type { ExtensionAPI, McpServerConfig } from "@earendil-works/pi-coding-agent";
 import { readFile } from "node:fs/promises";
+import type { ExtensionAPI, McpServerConfig } from "@earendil-works/pi-coding-agent";
 
 interface Registration {
 	name: string;

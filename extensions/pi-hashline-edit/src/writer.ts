@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, open, rename, unlink, type FileHandle } from "node:fs/promises";
+import { access, type FileHandle, open, rename, unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { assertRevision, fileRevision, staleFile } from "./anchor.ts";
 import { applyPatches, type PatchResult, type SplicePatch } from "./patch.ts";
-import { decodeText, readSnapshot, sameState, type FileSnapshot, type TextDocument } from "./reader.ts";
+import { decodeText, type FileSnapshot, readSnapshot, sameState, type TextDocument } from "./reader.ts";
 
 export interface EditInput {
 	revision: string;

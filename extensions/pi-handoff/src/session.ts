@@ -1,8 +1,8 @@
 /** Shared initialization for --here and a freshly launched target Pi. */
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { deriveSessionName, HANDOFF_ENTRY_TYPE } from "./record.ts";
 import type { HandoffPayload } from "./bundle.ts";
 import { assertHandoffDraft } from "./data.ts";
+import { deriveSessionName, HANDOFF_ENTRY_TYPE } from "./record.ts";
 
 // Pi 1.2.0 declares, but does not re-export, ReplacedSessionContext.
 type NewSessionOptions = NonNullable<Parameters<ExtensionCommandContext["newSession"]>[0]>;
