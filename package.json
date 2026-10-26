@@ -4,9 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "tsc": "tsc -p tsconfig.json",
-    "sync:instructions": "node scripts/sync-instructions.ts",
-    "check:instructions": "node scripts/sync-instructions.ts --check"
+    "tsc": "tsc -p tsconfig.json"
   },
   "packageManager": "pnpm@12.14.0",
   "pi": {
