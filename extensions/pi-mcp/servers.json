@@ -2,7 +2,7 @@
   "mcpServers": {
     "exa": {
       "url": "https://mcp.exa.ai/mcp",
-      "exposure": "codemode",
+      "exposure": "direct",
       "description": "优先用于公开网页、时效信息与跨来源检索。",
       "headers": {
         "x-api-key": "${EXA_API_KEY}"
@@ -10,7 +10,7 @@
     },
     "context7": {
       "url": "https://mcp.context7.com/mcp",
-      "exposure": "codemode",
+      "exposure": "direct",
       "description": "优先用于库、框架的文档、API 与用法示例检索。",
       "headers": {
         "Authorization": "Bearer ${CONTEXT7_API_KEY}"
@@ -18,7 +18,7 @@
     },
     "deepwiki": {
       "url": "https://mcp.deepwiki.com/mcp",
-      "exposure": "codemode",
+      "exposure": "direct",
       "description": "优先用于公开 GitHub 仓库的架构理解、模块关系与代码导航。"
     }
   }
