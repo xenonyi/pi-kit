@@ -4,6 +4,8 @@
  * Provides a `/btw` command for quick side questions that do not pollute the
  * conversation history. The answer appears in a temporary bottom panel and is
  * fully ephemeral — nothing is persisted to the session.
+ * The command is registered only for TUI sessions; print, JSON, and RPC runs
+ * never see it.
  *
  * Adapted from:
  * https://github.com/jayshah5696/pi-agent-extensions/tree/main/extensions/btw
@@ -30,9 +32,9 @@ import {
     matchesKey,
     Spacer,
     Text,
+    type TUI,
     truncateToWidth,
     visibleWidth,
-    type TUI,
 } from "@earendil-works/pi-tui";
 
 import {
@@ -380,6 +382,11 @@ async function runBtwCommand(
     args: string | undefined,
     ctx: ExtensionCommandContext,
 ): Promise<void> {
+    if (ctx.mode !== "tui") {
+        reportMessage(ctx, "btw requires TUI mode", "error");
+        return;
+    }
+
     const validation = validateBtwArgs(args);
     if (!validation.ok) {
         reportMessage(ctx, validation.error, "error");
@@ -410,25 +417,6 @@ async function runBtwCommand(
         content: [{ type: "text", text: buildBtwUserMessage(conversationText, question) }],
         timestamp: Date.now(),
     };
-
-    if (ctx.mode !== "tui") {
-        const result = await queryBtwAnswer(ctx, btwModel, userMessage);
-        if (result.status === "ok") {
-            if (ctx.mode === "print") {
-                console.log(`\n> btw: ${question}\n`);
-                console.log(result.answer);
-            } else {
-                reportMessage(ctx, `btw: ${question}\n\n${result.answer}`, "info");
-            }
-            return;
-        }
-        reportMessage(
-            ctx,
-            result.status === "cancelled" ? "Cancelled" : result.message,
-            result.status === "cancelled" ? "info" : "error",
-        );
-        return;
-    }
 
     const answerResult = await ctx.ui.custom<BtwQueryResult>((tui, theme, _kb, done) => {
         const loader = new BorderedLoader(tui, theme, `Thinking (${btwModel.id})...`);
@@ -476,10 +464,15 @@ async function runBtwCommand(
 }
 
 export default function btwExtension(pi: ExtensionAPI) {
-    pi.registerCommand("btw", {
-        description: "Ask a quick side question without polluting conversation history",
-        handler: async (args, ctx) => {
-            await runBtwCommand(args, ctx);
-        },
+    let registered = false;
+    pi.on("session_start", (_event, ctx) => {
+        if (ctx.mode !== "tui" || registered) return;
+        pi.registerCommand("btw", {
+            description: "Ask a quick side question without polluting conversation history",
+            handler: async (args, commandCtx) => {
+                await runBtwCommand(args, commandCtx);
+            },
+        });
+        registered = true;
     });
 }
