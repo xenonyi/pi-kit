@@ -67,7 +67,8 @@ export default function handoffExtension(pi: ExtensionAPI) {
 		if (!operation.allowReplacement && activeOperation === operation) activeOperation = undefined;
 	});
 
-	pi.registerCommand("handoff", {
+	let commandRegistered = false;
+	const registerHandoff = () => pi.registerCommand("handoff", {
 		description: "Hand off reviewed structured context to a new herdr tab (--split right|down, --here)",
 		handler: async (args, ctx) => {
 			if (ctx.mode !== "tui") {
@@ -251,5 +252,10 @@ export default function handoffExtension(pi: ExtensionAPI) {
 				if (activeOperation === operation) activeOperation = undefined;
 			}
 		},
+	});
+	pi.on("session_start", (_event, ctx) => {
+		if (ctx.mode !== "tui" || commandRegistered) return;
+		registerHandoff();
+		commandRegistered = true;
 	});
 }

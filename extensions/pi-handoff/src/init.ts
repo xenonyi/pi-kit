@@ -43,7 +43,7 @@ export function registerHandoffInitialization(pi: ExtensionAPI): void {
 		if (!ownReplacement || event.reason !== "new") invalidated = true;
 	});
 
-	pi.registerCommand(INITIALIZE_COMMAND, {
+	const registerInitializeCommand = () => pi.registerCommand(INITIALIZE_COMMAND, {
 		description: "Internal: initialize a one-shot handoff draft; never submit it",
 		handler: async (args, ctx) => {
 			let ticket: HandoffPackage | undefined;
@@ -96,5 +96,12 @@ export function registerHandoffInitialization(pi: ExtensionAPI): void {
 				else console.error(message);
 			}
 		},
+	});
+
+	let commandRegistered = false;
+	pi.on("session_start", (_event, ctx) => {
+		if (ctx.mode !== "tui" || commandRegistered || typeof pi.getFlag(INIT_FLAG) !== "string") return;
+		registerInitializeCommand();
+		commandRegistered = true;
 	});
 }
