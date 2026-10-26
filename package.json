@@ -13,9 +13,6 @@
     ],
     "skills": [
       "skills"
-    ],
-    "prompts": [
-      "prompts/*.md"
     ]
   },
   "devDependencies": {
