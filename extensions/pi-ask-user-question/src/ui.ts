@@ -69,9 +69,9 @@ interface ChoiceRow {
     /** Text appended after the label once a custom answer is saved. */
     suffix?: string;
     /**
-     * Static marker rendered before the label, e.g. "1. " for single-choice
-     * numbering or "[x] " / "[ ] " for multi-choice checkboxes. Kept separate
-     * from the label so descriptions can align with the label text.
+     * Static marker rendered before the label, e.g. "[x] " / "[ ] " for
+     * multi-choice checkboxes. Kept separate from the label so descriptions
+     * can align with the label text.
      */
     marker?: string;
     /** Action rows such as Submit stay outside the scrollable choice list. */
@@ -162,8 +162,7 @@ function renderChoiceRow(
             lines,
             theme.fg("muted", row.description),
             width,
-            // Line descriptions up with this row's label text (after the
-            // marker), so they stay flush for both numbering and checkboxes.
+            // Line descriptions up with the label text, after any marker,
             " ".repeat(FOCUS_PREFIX_WIDTH + visibleWidth(marker)),
         );
     }
@@ -521,7 +520,6 @@ export async function askSingleChoice(
                             ...options.map((option, index) => ({
                                 id: `option:${index}`,
                                 label: option.label,
-                                marker: `${index + 1}. `,
                                 description: option.description,
                             })),
                             {
