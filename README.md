@@ -18,6 +18,7 @@ pnpm tsc         # 类型检查
 | `pi-ask-user-question` | `ask_user_question` 工具：向用户提一个阻塞问题（自由文本 / 单选 / 多选），仅在 TUI 会话声明 | [README](./extensions/pi-ask-user-question/README.md) |
 | `pi-btw` | `/btw` 命令：不污染会话历史的旁支提问，答案只在临时面板，仅在 TUI 会话注册 | [README](./extensions/pi-btw/README.md) |
 | `pi-fold-runs` | 把连续的工具调用折成一行摘要，点击逐级展开成 Pi 原生卡，仅 TUI 生效 | [README](./extensions/pi-fold-runs/README.md) |
+| `pi-herdr` | Herdr 机械层：拆 pane、起 agent、归一化状态读取与透传；只在 herdr pane 内声明 | [README](./extensions/pi-herdr/README.md) |
 | `pi-hashline-edit` | `hash_read` / `hash_edit`：行锚点 + sha256 revision 校验的读取与原子行编辑 | [README](./extensions/pi-hashline-edit/README.md) |
 | `pi-lsp` | 按文件扩展名路由语言服务器，提供 `lsp_diagnostics` 与 `lsp_fix` | [README](./extensions/pi-lsp/README.md) |
 | `pi-mcp` | 从 `servers.json` 注册 MCP 服务器，缺环境变量的条目自动跳过 | [README](./extensions/pi-mcp/README.md) |
@@ -26,6 +27,8 @@ pnpm tsc         # 类型检查
 ## 技能
 
 - `skills/grill` — 分轮追问并压力测试计划、决定或想法，暴露重要未知后再执行。
+- `skills/herdr` — Herdr 操作入口：先查 `herdr_*` 工具，未覆盖的走 `herdr_cli` 透传，flag 以 `herdr --skill` 为准。
+- `skills/herdr-handoff` — 把任务连同上下文移交给另一个 Herdr agent pane；交完不等、不轮询。
 
 ## 规则片段
 
