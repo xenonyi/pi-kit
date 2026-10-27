@@ -2,8 +2,6 @@
 
 按文件扩展名把请求路由到可配置语言服务器的 LSP 扩展，提供 `lsp_diagnostics`（诊断）与 `lsp_fix`（源码操作）。
 
-合并自 [narumiruna/pi-extensions 的 packages/pi-lsp](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-lsp)（上游 `1d1f8fe`，MIT），改为本仓库直载 TypeScript 源码、无需构建步骤，并按本机语言栈裁剪了内置服务器目录。
-
 ## 使用
 
 - `lsp_diagnostics`：`paths`（文件或目录，默认工作区根）、`root`（工作区根，默认会话 cwd）、`limit`（每个服务器最多打开的文件数，默认 50）、`server`（服务器名或名称数组）。
@@ -44,28 +42,16 @@
 
 需要全局选项（如 `timeout`）时使用 `servers` 包装形状。服务器条目支持 `command`、`extensions`、`env`、`initialization`、`skipDirectories`、`diagnosticsSettleMs`、`pushDiagnosticsGraceMs`、`pullDiagnosticsGraceMs`；完整字段说明、8 项默认配置和追加 protobuf 的示例见 [docs/settings.md](./docs/settings.md)。
 
-## 行为与安全
+## 行为
 
 - 每次工具调用启动服务器，调用结束即关闭，不保留编辑器式增量会话。
 - 取消会停止当前服务器；会话关闭或切换会中止并等待该会话的全部调用。写入完成后不会因后续取消而回滚。
-- 服务器命令以 Pi 的权限运行并继承 Pi 环境，再叠加 `servers[].env`；项目配置只在项目被信任时使用。请审查每条配置的命令、参数、环境变量和初始化选项。
 - Windows 下无扩展名的命令按生效的 `PATH` 与子进程 cwd 解析，`.cmd`/`.bat` 通过 `%ComSpec%` 启动。
 
-## 限制
+## 安全
 
-- 诊断不会持续注入，必须由模型调用 `lsp_diagnostics`。
-- 只提供诊断与源码操作，不含符号跳转、引用和语义重命名。
-- 修复写入不进入 Pi 的共享文件变更队列，避免并发编辑同一文件。
-- 诊断和修复预览不做输出上限截断，请求需保持定向。
-- `clangd` 没有编译数据库时头文件解析与宏展开会大量误报，权威结论仍以工程构建为准。
+- 服务器命令以 Pi 的权限运行并继承 Pi 环境，再叠加 `servers[].env`；项目配置只在项目被信任时使用。请审查每条配置的命令、参数、环境变量和初始化选项。
 
-## 目录
+## 来源
 
-```text
-extensions/pi-lsp/
-├── index.ts          # Pi 入口
-├── src/              # 实现（客户端、路由、运行器、配置、文本编辑）
-├── docs/settings.md  # 配置参考
-├── AGENTS.md         # 上游协议不变量
-└── LICENSE           # MIT, Copyright (c) 2026 narumiruna
-```
+合并自 [narumiruna/pi-extensions 的 packages/pi-lsp](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-lsp)（上游 `1d1f8fe`，MIT），改为本仓库直载 TypeScript 源码、无需构建步骤，并按本机语言栈裁剪了内置服务器目录。许可证见 [LICENSE](./LICENSE)。

@@ -45,7 +45,7 @@ import {
     resolveScrollState,
     serializeBtwConversation,
     validateBtwArgs,
-} from "./btw.js";
+} from "./src/btw.js";
 
 type BtwQueryResult =
     | { status: "ok"; answer: string; usage?: Usage }
