@@ -225,19 +225,85 @@ export function callRowOf(tool: ToolBox): CallRow {
 	};
 }
 
-/** Pi's folded call header, rebuilt as one line this module can lay out. */
+/**
+ * Room the one value a folded row shows: a path, a command, or the head of a
+ * script fits, and every row of a group ends its text at the same column.
+ */
+const PREVIEW_CHARS = 44;
+
+/**
+ * Argument names that identify a call, best first. Only the winner is shown, so
+ * it has to be the value that tells two calls of the same tool apart; unknown
+ * names fall in behind, alphabetically.
+ */
+const IDENTITY_KEYS = ["pattern", "path", "file", "command", "code", "query", "url", "prompt", "question", "script"];
+
+/** `tools.<name>(` — how a codemode script reaches the tools it really runs. */
+const NESTED_CALL = /\btools\.([A-Za-z_$][\w$]*)\s*\(/g;
+
+/**
+ * Pi's folded call header, rebuilt as one line this module can lay out: the one
+ * identifying argument, and how many others the row left out.
+ */
 function previewOf(args: unknown): string | undefined {
 	if (args == null) return undefined;
 	try {
 		const entries: Array<[string, unknown]> = isRecord(args) && !Array.isArray(args)
 			? Object.entries(args)
 			: [["args", args]];
-		if (entries.length === 0) return undefined;
-		const pairs = entries.map(([key, value]) => `${key}=${jsonish(value)}`).join(" ");
-		return pairs.length > 100 ? `${pairs.slice(0, 97)}...` : pairs;
+		// `null` says the argument was left out: nothing to report in one row.
+		const set = entries.filter(([, value]) => value !== null && value !== undefined);
+		if (set.length === 0) return undefined;
+		const primary = set.reduce((best, entry) => (ranksBefore(entry[0], best[0]) ? entry : best));
+		const text = (primary[0] === "code" ? nestedCalls(primary[1]) : undefined) ?? previewValue(primary[1]);
+		const hidden = set.length - 1;
+		return hidden > 0 ? `${text} +${hidden}` : text;
 	} catch {
 		return undefined;
 	}
+}
+
+/** Rank of an argument name; everything unnamed shares the last place. */
+function rankOf(name: string): number {
+	const index = IDENTITY_KEYS.indexOf(name);
+	return index === -1 ? IDENTITY_KEYS.length : index;
+}
+
+function ranksBefore(name: string, other: string): boolean {
+	const rank = rankOf(name);
+	const otherRank = rankOf(other);
+	return rank !== otherRank ? rank < otherRank : name < other;
+}
+
+/**
+ * What a script argument runs: `read×2 powershell`, in the order it names them.
+ *
+ * A codemode call is told apart by the tools inside it, not by its opening
+ * `const`; a script that names no tool keeps its own text.
+ */
+function nestedCalls(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const counts = new Map<string, number>();
+	for (const [, name] of value.matchAll(NESTED_CALL)) {
+		if (name === undefined) continue;
+		counts.set(name, (counts.get(name) ?? 0) + 1);
+	}
+	if (counts.size === 0) return undefined;
+	return [...counts].map(([name, count]) => (count === 1 ? name : `${name}×${count}`)).join(" ");
+}
+
+/**
+ * One argument value, squeezed into the room a folded row has for it.
+ *
+ * `JSON.stringify` writes a newline as `\n` and every quote and backslash as
+ * two characters, so a script argument would spend the whole row on escapes and
+ * name nothing. Strings are therefore shown as they read, flattened to one
+ * line; everything else keeps its JSON shape. What is still too long is cut
+ * with `…`.
+ */
+function previewValue(value: unknown): string {
+	const text = typeof value === "string" ? value.replaceAll(/\s+/g, " ").trim() : jsonish(value);
+	return text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS - 1)}…` : text;
 }
 
 function jsonish(value: unknown): string {
