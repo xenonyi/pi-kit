@@ -34,7 +34,7 @@ pnpm tsc         # 类型检查
 
 `rules/` 存 Markdown 规则片段，由 `pi-rules` 按 `os` / `host` / `cwd` / `tools` 条件注入系统提示词：
 
-- `rules/shared/` — 所有机器通用（`00-authorization.md`、`10-preferences.md`）
+- `rules/shared/` — 所有机器通用（`00-authorization.md`、`10-preferences.md`、`20-web.md`）
 - `rules/machines/` — 按机器条件生效（`windows.md`）
 
 ## 开发
