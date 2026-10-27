@@ -3,7 +3,7 @@
     "exa": {
       "url": "https://mcp.exa.ai/mcp",
       "exposure": "codemode",
-      "description": "优先用于公开网页、时效信息与跨来源检索。",
+      "description": "公开网页检索：搜索时效信息与多来源结果、按 URL 抓正文、多步调研与名单补全（web search / fetch url / research agent / current news）。",
       "headers": {
         "x-api-key": "${EXA_API_KEY}"
       }
@@ -11,7 +11,7 @@
     "context7": {
       "url": "https://mcp.context7.com/mcp",
       "exposure": "codemode",
-      "description": "优先用于库、框架的文档、API 与用法示例检索。",
+      "description": "库、框架、SDK 与 CLI 的现行文档：API 用法、配置、版本迁移与库相关排错（library docs / api reference / migration / setup）。",
       "headers": {
         "Authorization": "Bearer ${CONTEXT7_API_KEY}"
       }
@@ -19,7 +19,7 @@
     "deepwiki": {
       "url": "https://mcp.deepwiki.com/mcp",
       "exposure": "codemode",
-      "description": "优先用于公开 GitHub 仓库的架构理解、模块关系与代码导航。"
+      "description": "公开 GitHub 仓库文档：架构、模块关系与代码导航，可读 wiki 或直接提问（github repo / architecture / codebase wiki / ask question）。"
     }
   }
 }
