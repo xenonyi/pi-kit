@@ -26,6 +26,7 @@
 | 7 | 测试：纯函数层用 `node:test`（Node 22.19 自带，`--experimental-strip-types`，零新依赖）；真机行为在命名 test session 手工验收 | 仓库现无测试；风险集中在归一化与门控，而非进程调用。跑测试需另行授权 |
 | 8 | 透传安全：短黑名单硬拦——空参调用（会启动/附加 TUI）、`server stop`、`update`、`workspace close --group`；其余放行并在错误里说明原因 | 黑名单越长越可能挡住合法场景；这四条是「不可恢复」或「会弄坏本扩展自身」 |
 | 9 | skill 两个都改：`herdr` 删 bash→PowerShell 对照表、换工具表 + 优先级；`herdr-handoff` 把命令段落压缩成一句，保留拓扑选择 / 状态门语义 / blocked 不代答 / 交接文档骨架 / 回读三层 / 失败对照 / 硬规则 | 对照表是纯机械痛点，已被工具消灭；handoff 的价值在判断而非命令写法 |
+| 13 | **跨机：5 个语义工具加可选 `machine`**（推翻结论 5） | 用户明确要求 B。跨机 handoff 不再只能手工拼 cli；代价是要处理远端 `--current` 不成立，故 `pane_split` / `agent_spawn` 在 `machine` 下必须给 `pane`，cwd 从 `pane get` 取。`herdr_cli` 仍用 args 里的 `--machine` |
 | 12 | `agent_prompt` 默认复查：提交后等 3s 取一次 `agent get`，返回 `{submitted, startObserved}`；不增长即 `startObserved=false` | 交接流程刻意不带 `--wait`，拿不到 5 秒活动门；这是 skill 里最反直觉的一条判据，正适合交给代码。代价是固定 +3s |
 | 11 | 门控：`HERDR_ENV`/`HERDR_PANE_ID` 不满足时，6 个工具按 session 重新注册为 `hidden`；沿用 `pi-ask-user-question` 的每-session 重注册模式 | 在 paseo 等非 herdr 环境里，永不生效的工具不该占声明位；而 herdr 内门控不产生任何成本 |
 | 10 | 不合并两个 skill | 触发条件不同（通用控制 vs 明确 handoff）；合并后为了看一眼隔壁 pane 要读 14 KB |

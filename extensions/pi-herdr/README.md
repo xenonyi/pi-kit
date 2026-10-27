@@ -31,7 +31,7 @@
 - **方向推导有下限**：每一半至少 40 列或 8 行，否则拒绝并说明，不产出不可用的窄列。
 - **投递后复查**：`herdr_agent_prompt` 提交后固定等 3 秒重读，状态序列增长即 `startObserved=true`。`false` 只表示「没看到活动」，不代表文本没送到；要读屏再决定是否重发。
 - **透传黑名单**：空参数（`herdr` 裸跑会启动/附加 TUI）、`server stop`、`update`、`workspace close --group` 一律拒绝并说明原因；其余放行。
-- **作用域**：语义工具只操作本机当前 session。跨机请用 `herdr_cli` 并自带 `--machine`——ID 与 agent 名在每台服务器各自独立，静默打到本机同名 agent 是最危险的失败。
+- **跨机**：5 个语义工具都接受可选 `machine`（`herdr machine list` 的 label 或 id），整次调用加 `--machine`。远端 `--current` 不成立，所以 `herdr_pane_split` / `herdr_agent_spawn` 必须同时传 `pane`，cwd 默认取该 pane 的 `pane get`。`worktree create`、`notification`、`pane close` 仍走 `herdr_cli` 并自带 `--machine`。
 - **id 不进正文**：会返回标识符的工具都声明了 `outputSchema` 并返回 `structuredContent`，脚本（codemode）拿到的就是对象；**不要**从文本里正则抓 id——曾因此把调用方自己的 pane 关掉。
 - **并发**：6 个工具都是 `executionMode: "sequential"`，避免同一批调用里的两个 split 互相破坏布局。
 - **测试**：纯函数层（argv 构造、归一化、状态门）用 `node:test`：

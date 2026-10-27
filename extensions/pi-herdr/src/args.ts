@@ -90,13 +90,42 @@ const DENYLIST: Array<{ match: (args: string[]) => boolean; reason: string }> = 
  * would break the extension itself. `callerPaneId` guards the one mistake that
  * looks harmless: closing the pane this session runs in, which ends it.
  */
+/** Global options may precede the subcommand, so the denylist must look past them. */
+const GLOBAL_VALUE_OPTIONS = new Set(["--machine", "--session", "--remote", "--remote-keybindings"]);
+const GLOBAL_FLAGS = new Set(["--handoff", "--default-config"]);
+
+export function stripGlobalOptions(args: string[]): { args: string[]; machine: string | null } {
+	let index = 0;
+	let machine: string | null = null;
+	while (index < args.length) {
+		const arg = args[index];
+		if (GLOBAL_VALUE_OPTIONS.has(arg)) {
+			if (arg === "--machine") machine = args[index + 1] ?? null;
+			index += 2;
+			continue;
+		}
+		if (GLOBAL_FLAGS.has(arg)) {
+			index += 1;
+			continue;
+		}
+		break;
+	}
+	return { args: args.slice(index), machine };
+}
+
 export function checkPassthrough(args: string[], callerPaneId?: string | null): Denial {
+	const { args: rest, machine } = stripGlobalOptions(args);
+	if (rest.length === 0) return { denied: true, reason: EMPTY_REASON };
+
+	// A remote pane id can coincidentally equal this session's id; only the local
+	// session is at risk, so the caller-pane guard applies without --machine.
 	const closesCaller =
-		args[0] === "pane" &&
-		args[1] === "close" &&
+		!machine &&
+		rest[0] === "pane" &&
+		rest[1] === "close" &&
 		typeof callerPaneId === "string" &&
 		callerPaneId.length > 0 &&
-		args.includes(callerPaneId);
+		rest.includes(callerPaneId);
 	if (closesCaller) {
 		return {
 			denied: true,
@@ -104,7 +133,7 @@ export function checkPassthrough(args: string[], callerPaneId?: string | null): 
 		};
 	}
 	for (const entry of DENYLIST) {
-		if (entry.match(args)) return { denied: true, reason: entry.reason };
+		if (entry.match(rest)) return { denied: true, reason: entry.reason };
 	}
 	return { denied: false };
 }
@@ -113,14 +142,41 @@ export interface PaneSplitOptions {
 	direction: SplitDirection;
 	cwd?: string | null;
 	focus?: boolean;
+	/** Target pane instead of `--current`; required when splitting a saved machine. */
+	paneId?: string | null;
 }
 
 export function paneSplitArgs(options: PaneSplitOptions): string[] {
-	const args = ["pane", "split", "--current", "--direction", options.direction];
+	const args = ["pane", "split"];
+	if (options.paneId) args.push("--pane", options.paneId);
+	else args.push("--current");
+	args.push("--direction", options.direction);
 	if (options.cwd) args.push("--cwd", options.cwd);
 	args.push(options.focus ? "--focus" : "--no-focus");
 	return args;
 }
+
+/** Prefix an argv with `--machine` when a saved remote host is selected. */
+export function withMachine(machine: string | null | undefined, args: string[]): string[] {
+	const label = machine?.trim();
+	return label ? ["--machine", label, ...args] : args;
+}
+
+/**
+ * `--current` resolves only inside the calling session. A saved machine shares
+ * no caller context, so a remote split must name its pane.
+ */
+export function checkSplitTarget(machine: string | null | undefined, pane: string | null | undefined): Denial {
+	if (machine?.trim() && !pane?.trim()) {
+		return {
+			denied: true,
+			reason:
+				"Splitting a remote pane needs an explicit pane id: --current only resolves inside the calling session, and a saved machine shares none. Pass pane with a pane id from that machine.",
+		};
+	}
+	return { denied: false };
+}
+
 
 export interface AgentStartOptions {
 	name: string;

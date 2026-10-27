@@ -107,8 +107,23 @@ test("every tool is sequential and documents its parameters", () => {
 			assert.ok(tool.description.length > 40, `${tool.name} description too short`);
 		}
 		const byName = new Map(loaded.tools.map((tool) => [tool.name, tool]));
-		assert.deepEqual(byName.get("herdr_agent_prompt")?.parameterKeys.sort(), ["target", "text"]);
-		assert.deepEqual(byName.get("herdr_pane_split")?.parameterKeys.sort(), ["cwd", "direction", "focus"]);
+		assert.deepEqual(byName.get("herdr_agent_prompt")?.parameterKeys.sort(), ["machine", "target", "text"]);
+		assert.deepEqual(byName.get("herdr_pane_split")?.parameterKeys.sort(), [
+			"cwd",
+			"direction",
+			"focus",
+			"machine",
+			"pane",
+		]);
+		assert.deepEqual(byName.get("herdr_agent_spawn")?.parameterKeys.sort(), [
+			"cwd",
+			"direction",
+			"kind",
+			"machine",
+			"name",
+			"pane",
+			"timeoutMs",
+		]);
 		assert.deepEqual(byName.get("herdr_cli")?.parameterKeys.sort(), ["args", "json", "timeoutMs"]);
 	} finally {
 		loaded.restore();

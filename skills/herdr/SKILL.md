@@ -28,7 +28,11 @@ description: Herdr 操作入口：控制 pane、tab、workspace 与 pane 内的 
 | `herdr_agent_read` | 读 pane 输出，默认 `recent-unwrapped` 120 行 |
 | `herdr_cli` | 其余子命令。空参、`server stop`、`update`、`workspace close --group`、关闭调用方自己的 pane 一律拒绝 |
 
-语义工具只作用于**本机当前 session**。跨机（`--machine`）一律走 `herdr_cli` 并自带前缀：ID 与 agent 名在每台服务器各自独立，两边都可能有 `w1:p1`。
+所有语义工具都接受可选 `machine`（`herdr machine list` 里的 label 或 id）：带上它，整次调用都加 `--machine` 前缀，读写都在那台机器上。
+
+- 远端 `--current` 不成立：`herdr_pane_split` / `herdr_agent_spawn` 必须同时传 `pane`（那台机器上的 pane id），cwd 默认取该 pane 的 `pane get` 结果。
+- ID 与 agent 名是各机器自己的，两台都可能有 `w1:p1`；返回体里的 `machine` 字段说明这次落在哪。
+- 工具只覆盖 pane / agent 动作。`worktree create`、`notification`、`pane close` 等仍走 `herdr_cli` 并自带 `--machine`。
 
 ## 硬规则
 

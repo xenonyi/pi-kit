@@ -10,6 +10,9 @@ import {
 	checkPromptText,
 	chooseSplitDirection,
 	MAX_PROMPT_TEXT_CHARS,
+	checkSplitTarget,
+	withMachine,
+	stripGlobalOptions,
 	paneSplitArgs,
 } from "./args.ts";
 
@@ -66,6 +69,62 @@ test("checkPassthrough allows ordinary queries and scoped closes", () => {
 	assert.deepEqual(checkPassthrough(["workspace", "close", "w1"]), { denied: false });
 	assert.deepEqual(checkPassthrough(["server", "reload-config"]), { denied: false });
 	assert.deepEqual(checkPassthrough(["--machine", "box", "agent", "list"]), { denied: false });
+});
+
+test("withMachine prefixes the argv only when a machine is set", () => {
+	assert.deepEqual(withMachine(undefined, ["pane", "list"]), ["pane", "list"]);
+	assert.deepEqual(withMachine(null, ["pane", "list"]), ["pane", "list"]);
+	assert.deepEqual(withMachine("  ", ["pane", "list"]), ["pane", "list"]);
+	assert.deepEqual(withMachine(" gpuserver ", ["pane", "list"]), [
+		"--machine",
+		"gpuserver",
+		"pane",
+		"list",
+	]);
+});
+
+test("checkSplitTarget requires a pane only for a remote split", () => {
+	assert.deepEqual(checkSplitTarget(undefined, undefined), { denied: false });
+	assert.deepEqual(checkSplitTarget("box", "w1:p2"), { denied: false });
+	const denial = checkSplitTarget("box", "  ");
+	assert.equal(denial.denied, true);
+	assert.match(denial.reason ?? "", /explicit pane id/);
+});
+
+test("paneSplitArgs targets an explicit pane for a saved machine", () => {
+	assert.deepEqual(paneSplitArgs({ direction: "right", paneId: "w1:p2", focus: false }), [
+		"pane",
+		"split",
+		"--pane",
+		"w1:p2",
+		"--direction",
+		"right",
+		"--no-focus",
+	]);
+	assert.equal(paneSplitArgs({ direction: "down" }).includes("--current"), true);
+});
+
+test("checkPassthrough looks past global options", () => {
+	assert.equal(checkPassthrough(["--machine", "box", "server", "stop"]).denied, true);
+	assert.equal(checkPassthrough(["--session", "x", "server", "stop"]).denied, true);
+	assert.equal(checkPassthrough(["--remote", "host", "update"]).denied, true);
+	assert.equal(checkPassthrough(["--handoff", "update"]).denied, true);
+	assert.equal(checkPassthrough(["--machine", "box"]).denied, true);
+	assert.deepEqual(checkPassthrough(["--machine", "box", "pane", "list"]), { denied: false });
+});
+
+test("stripGlobalOptions reports the machine and the remaining argv", () => {
+	assert.deepEqual(stripGlobalOptions(["--machine", "box", "agent", "list"]), {
+		args: ["agent", "list"],
+		machine: "box",
+	});
+	assert.deepEqual(stripGlobalOptions(["pane", "list"]), { args: ["pane", "list"], machine: null });
+});
+
+test("a remote pane id equal to the caller id is not blocked", () => {
+	assert.deepEqual(checkPassthrough(["--machine", "box", "pane", "close", "w1:p2"], "w1:p2"), {
+		denied: false,
+	});
 });
 
 test("checkPassthrough refuses to close the calling pane", () => {

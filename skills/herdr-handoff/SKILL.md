@@ -164,5 +164,6 @@ herdr_cli ["notification","show","Handoff ready","--body","<name> · <路径或�
 - `--no-focus` 用于后台工作，除非用户明确要切过去。
 - 目标一律用 `--current`、显式 pane ID 或唯一 agent 名；**不要依赖另一个 client 的焦点 pane**。
 - ID 从 `structuredContent` / `.result.*` 解析，不从正文、sidebar 顺序或示例里推。
-- 跨机（`--machine`）时：所有命令走 `herdr_cli` 并带同一前缀，ID 与名字都是那台服务器各自的；`--current` 在远端不成立；远端 worktree 路径必须是绝对路径或 `~/` 开头。
+- 跨机时给每个语义工具传同一个 `machine`；拆 pane / spawn 还要传 `pane`（远端 `--current` 不成立），cwd 由工具从 `pane get` 取。ID 与名字都是那台机器各自的。
+- 工具只覆盖 pane / agent：`worktree create`、`notification show`、`pane close` 走 `herdr_cli` 并自带 `--machine`；远端 worktree 路径必须绝对或 `~/` 开头。
 - `blocked` 一律问用户，不代点同意。

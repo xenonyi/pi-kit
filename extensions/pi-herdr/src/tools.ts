@@ -9,6 +9,10 @@
  * `structuredContent`, so scripts (codemode) get the pane/agent id as data
  * instead of parsing it out of prose. Scraping ids from text is how a caller
  * ends up closing its own pane.
+ *
+ * Every tool accepts an optional `machine`: the same call then carries
+ * `--machine <label>`. Remote ids and agent names are scoped to that machine,
+ * and `--current` does not resolve there, so a remote split must name its pane.
  */
 
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -21,11 +25,13 @@ import {
 	checkAgentName,
 	checkPassthrough,
 	checkPromptText,
+	checkSplitTarget,
 	chooseSplitDirection,
 	MAX_PROMPT_TEXT_CHARS,
 	paneSplitArgs,
 	READ_SOURCES,
 	type SplitDirection,
+	withMachine,
 } from "./args.ts";
 import { callHerdr, HerdrError, runHerdr, sleep } from "./cli.ts";
 import { gatePromptTarget, sequencesOf, spawnReadiness, startObserved } from "./gates.ts";
@@ -54,7 +60,6 @@ const PANE_CALL_TIMEOUT_MS = 10_000;
 const SPLIT_TIMEOUT_MS = 15_000;
 const START_TIMEOUT_MS = 30_000;
 const PROMPT_TIMEOUT_MS = 20_000;
-
 
 type JsonObject = { [key: string]: JsonValue };
 type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
@@ -94,25 +99,59 @@ function describeError(error: unknown): { code: string | null; message: string }
 	return { code: null, message: String(error) };
 }
 
-async function callerPane(signal?: AbortSignal): Promise<{ paneId: string; cwd: string | null }> {
-	const payload = await callHerdr({ args: ["pane", "current", "--current"], signal }, PANE_CALL_TIMEOUT_MS);
-	const pane = unwrapResult(payload)?.pane as Record<string, unknown> | undefined;
-	const paneId = readString(pane ?? null, "pane_id");
-	if (!paneId) {
-		throw new HerdrError("herdr pane current --current did not report a pane_id; nothing was changed.", {
-			code: "unexpected_output",
-		});
+interface TargetSource {
+	machine: string | null;
+	paneId: string;
+	cwd: string | null;
+}
+
+/**
+ * Resolve the pane a split starts from. Locally that is the calling pane;
+ * on a saved machine it must be named, and its cwd comes from `pane get`.
+ */
+async function sourcePane(
+	options: { machine?: string; pane?: string; cwd?: string },
+	signal?: AbortSignal,
+): Promise<TargetSource> {
+	const machine = options.machine?.trim() || null;
+	if (!machine) {
+		const payload = await callHerdr({ args: ["pane", "current", "--current"], signal }, PANE_CALL_TIMEOUT_MS);
+		const pane = unwrapResult(payload)?.pane as Record<string, unknown> | undefined;
+		const paneId = readString(pane ?? null, "pane_id");
+		if (!paneId) {
+			throw new HerdrError("herdr pane current --current did not report a pane_id; nothing was changed.", {
+				code: "unexpected_output",
+			});
+		}
+		return { machine, paneId, cwd: normalizeCwd(readString(pane ?? null, "cwd")) };
 	}
-	return { paneId, cwd: normalizeCwd(readString(pane ?? null, "cwd")) };
+
+	const check = checkSplitTarget(machine, options.pane);
+	if (check.denied) throw new HerdrError(check.reason ?? "pane is required", { code: "machine_pane_required" });
+	const paneId = (options.pane ?? "").trim();
+	const payload = await callHerdr(
+		{ args: withMachine(machine, ["pane", "get", paneId]), signal },
+		PANE_CALL_TIMEOUT_MS,
+	);
+	const pane = unwrapResult(payload)?.pane as Record<string, unknown> | undefined;
+	return {
+		machine,
+		paneId,
+		cwd: options.cwd?.trim() || normalizeCwd(readString(pane ?? null, "cwd")),
+	};
 }
 
 async function resolveSplitDirection(
 	requested: SplitDirection | undefined,
 	paneId: string,
+	machine: string | null,
 	signal?: AbortSignal,
 ): Promise<{ direction: SplitDirection; reason: string }> {
 	if (requested) return { direction: requested, reason: "explicit direction" };
-	const payload = await callHerdr({ args: ["pane", "layout", "--pane", paneId], signal }, PANE_CALL_TIMEOUT_MS);
+	const payload = await callHerdr(
+		{ args: withMachine(machine, ["pane", "layout", "--pane", paneId]), signal },
+		PANE_CALL_TIMEOUT_MS,
+	);
 	const rect = extractPaneRect(payload, paneId);
 	if (!rect) {
 		throw new HerdrError(
@@ -125,8 +164,11 @@ async function resolveSplitDirection(
 	return { direction: choice.direction, reason: choice.reason };
 }
 
-async function readAgent(target: string, signal?: AbortSignal): Promise<AgentView> {
-	const payload = await callHerdr({ args: agentGetArgs(target), signal }, PANE_CALL_TIMEOUT_MS);
+async function readAgent(target: string, machine: string | null, signal?: AbortSignal): Promise<AgentView> {
+	const payload = await callHerdr(
+		{ args: withMachine(machine, agentGetArgs(target)), signal },
+		PANE_CALL_TIMEOUT_MS,
+	);
 	const view = normalizeAgentView(payload);
 	if (!view) {
 		throw new HerdrError(`herdr agent get ${target} returned no agent record.`, { code: "unexpected_output" });
@@ -137,7 +179,21 @@ async function readAgent(target: string, signal?: AbortSignal): Promise<AgentVie
 const DirectionParameter = Type.Optional(
 	Type.Union([Type.Literal("right"), Type.Literal("down")], {
 		description:
-			'Split direction. Only "right" and "down" exist. Omit to derive it from the caller pane geometry (widest axis first).',
+			'Split direction. Only "right" and "down" exist. Omit to derive it from the source pane geometry (widest axis first).',
+	}),
+);
+
+const MachineParameter = Type.Optional(
+	Type.String({
+		description:
+			"Saved SSH machine label or id (see `herdr machine list`). Omit for the local session. Ids and agent names are scoped to that machine, and a remote split also needs pane.",
+	}),
+);
+
+const PaneTargetParameter = Type.Optional(
+	Type.String({
+		description:
+			"Pane id to split. Required when machine is set, because --current does not resolve on a saved machine. Ignored otherwise.",
 	}),
 );
 
@@ -148,9 +204,11 @@ const TriStateSchema = Type.Union([Type.Boolean(), Type.Literal("unknown")]);
 
 const PaneSplitParameters = Type.Object({
 	direction: DirectionParameter,
+	pane: PaneTargetParameter,
+	machine: MachineParameter,
 	cwd: Type.Optional(
 		Type.String({
-			description: "Working directory for the new pane. Defaults to the caller pane's current directory.",
+			description: "Working directory for the new pane. Defaults to the source pane's current directory.",
 		}),
 	),
 	focus: Type.Optional(
@@ -165,6 +223,7 @@ const PaneSplitOutput = Type.Object({
 	direction: DirectionSchema,
 	cwd: NullableString,
 	fromPaneId: Type.String({ description: "The pane that was split." }),
+	machine: NullableString,
 });
 
 const AgentSpawnParameters = Type.Object({
@@ -176,8 +235,10 @@ const AgentSpawnParameters = Type.Object({
 			"Agent kind passed to `agent start --kind`. Known kinds: pi, claude, codex, gemini, cursor, devin, agy, cline, omp, mastracode, opencode, copilot, kimi, kiro, droid, amp, grok, hermes, kilo, qodercli, qwen, letta, maki, muse.",
 	}),
 	direction: DirectionParameter,
+	pane: PaneTargetParameter,
+	machine: MachineParameter,
 	cwd: Type.Optional(
-		Type.String({ description: "Working directory for the new pane. Defaults to the caller pane's directory." }),
+		Type.String({ description: "Working directory for the new pane. Defaults to the source pane's directory." }),
 	),
 	timeoutMs: Type.Optional(
 		Type.Number({
@@ -192,6 +253,7 @@ const AgentSpawnOutput = Type.Object({
 	kind: Type.String(),
 	direction: DirectionSchema,
 	cwd: NullableString,
+	machine: NullableString,
 	ready: Type.Boolean(),
 	status: NullableString,
 	error: Type.Optional(Type.Object({ code: NullableString, message: Type.String() })),
@@ -202,6 +264,7 @@ const AgentTargetParameters = Type.Object({
 		description:
 			"Live agent name or the pane id currently hosting it (for example w1:p2). Names are cleared when the occupant exits.",
 	}),
+	machine: MachineParameter,
 });
 
 const AgentGetOutput = Type.Object({
@@ -210,6 +273,7 @@ const AgentGetOutput = Type.Object({
 	kind: NullableString,
 	status: Type.String(),
 	cwd: NullableString,
+	machine: NullableString,
 	interactiveReady: TriStateSchema,
 	launchPending: TriStateSchema,
 	completionSeq: Type.Number(),
@@ -227,6 +291,7 @@ const AgentPromptParameters = Type.Object({
 	text: Type.String({
 		description: `Prompt text, submitted as one paste plus Enter. Up to ${MAX_PROMPT_TEXT_CHARS} characters; write longer documents to a file and point at the path instead.`,
 	}),
+	machine: MachineParameter,
 });
 
 const AgentPromptOutput = Type.Object({
@@ -236,12 +301,14 @@ const AgentPromptOutput = Type.Object({
 	probeMs: Type.Number(),
 	status: NullableString,
 	paneId: NullableString,
+	machine: NullableString,
 	stateChangeSeqBefore: NullableNumber,
 	stateChangeSeqAfter: NullableNumber,
 });
 
 const AgentReadParameters = Type.Object({
 	target: Type.String({ description: "Live agent name or hosting pane id." }),
+	machine: MachineParameter,
 	source: Type.Optional(
 		Type.Union(
 			READ_SOURCES.map((source) => Type.Literal(source)),
@@ -266,12 +333,13 @@ const AgentReadOutput = Type.Object({
 	chars: Type.Number(),
 	text: Type.String({ description: "The trimmed output; scripts receive this instead of the text content." }),
 	truncated: Type.Boolean(),
+	machine: NullableString,
 });
 
 const PassthroughParameters = Type.Object({
 	args: Type.Array(Type.String(), {
 		description:
-			'Arguments after the herdr binary, for example ["pane","list"]. No shell is involved, so no quoting is needed. Only the local session unless the arguments include --machine.',
+			'Arguments after the herdr binary, for example ["pane","list"]. No shell is involved, so no quoting is needed. Include --machine (before the subcommand) when the target is a saved remote host.',
 	}),
 	json: Type.Optional(Type.Boolean({ description: "Parse stdout as JSON when possible. Defaults to true." })),
 	timeoutMs: Type.Optional(
@@ -299,33 +367,56 @@ export function registerHerdrTools(
 		name: "herdr_pane_split",
 		label: "Herdr: Split pane",
 		description:
-			"Split the calling Herdr pane and return the new pane id. Derives right/down from the caller geometry when direction is omitted, defaults to --no-focus, and inherits the caller's working directory. Local session only; use herdr_cli with --machine for remote hosts.",
-		promptSnippet: "Split the current Herdr pane and get the new pane id",
+			"Split a Herdr pane and return the new pane id. Locally it splits the calling pane; with `machine` it splits the pane named in `pane`, because --current does not resolve on a saved host. Derives right/down from the source geometry when direction is omitted, defaults to --no-focus, and inherits the source working directory.",
+		promptSnippet: "Split a Herdr pane and get the new pane id",
 		promptGuidelines: [
 			"Use herdr_pane_split before starting an agent or running a command in a sibling pane; read the returned paneId instead of predicting one.",
 			"Keep focus in the calling pane unless the user asked to switch.",
 			"Never scrape the pane id out of this tool's prose; read `structuredContent.paneId` (or the `details.paneId`) instead.",
+			"Pass machine to split a saved host, and pass pane with its pane id: --current only resolves in the calling session.",
 		],
 		parameters: PaneSplitParameters,
 		outputSchema: PaneSplitOutput,
 		exposure,
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal) {
-			const caller = await callerPane(signal);
-			const { direction, reason } = await resolveSplitDirection(params.direction, caller.paneId, signal);
-			const cwd = params.cwd ?? caller.cwd;
+			const source = await sourcePane(params, signal);
+			const { direction, reason } = await resolveSplitDirection(
+				params.direction,
+				source.paneId,
+				source.machine,
+				signal,
+			);
+			const cwd = params.cwd ?? source.cwd;
 			const payload = await callHerdr(
-				{ args: paneSplitArgs({ direction, cwd, focus: params.focus === true }), signal },
+				{
+					args: withMachine(
+						source.machine,
+						paneSplitArgs({
+							direction,
+							cwd,
+							focus: params.focus === true,
+							paneId: source.machine ? source.paneId : null,
+						}),
+					),
+					signal,
+				},
 				SPLIT_TIMEOUT_MS,
 			);
 			const paneId = extractPaneId(payload);
 			if (!paneId) {
 				throw new HerdrError("pane split reported success without a pane_id.", { code: "unexpected_output" });
 			}
-			const structured = { paneId, direction, cwd, fromPaneId: caller.paneId };
+			const structured = {
+				paneId,
+				direction,
+				cwd,
+				fromPaneId: source.paneId,
+				machine: source.machine,
+			};
 			const text = [
 				`New pane: ${paneId}`,
-				`split ${caller.paneId} ${direction} (${reason})`,
+				`split ${source.paneId} ${direction} (${reason})${source.machine ? ` on ${source.machine}` : ""}`,
 				`cwd: ${cwd ?? "unknown"}`,
 			].join("\n");
 			return textResult(state, text, structured, structured);
@@ -336,10 +427,10 @@ export function registerHerdrTools(
 		name: "herdr_agent_spawn",
 		label: "Herdr: Spawn agent",
 		description:
-			"Create a sibling pane in the current tab and start an agent in it, then report whether it reached an interactive prompt. Combines pane split, agent start, and the readiness check. Returns the pane id even when startup is not ready so the caller can inspect or close it. Never retries. Local session only.",
+			"Create a sibling pane and start an agent in it, then report whether it reached an interactive prompt. Combines pane split, agent start, and the readiness check. Returns the pane id even when startup is not ready so the caller can inspect or close it. Never retries. With `machine`, pass the remote pane to split in `pane`.",
 		promptSnippet: "Create a sibling pane and start an agent in it",
 		promptGuidelines: [
-			"Use herdr_agent_spawn for the handoff default: a sibling pane in the current tab with the caller's working directory.",
+			"Use herdr_agent_spawn for the handoff default: a sibling pane in the current tab with the source working directory.",
 			"Do not retry after a readiness failure: read the pane first.",
 			"Only close the pane this tool created, and only when the handoff failed or the user cancelled. Take the id from `structuredContent.paneId`.",
 		],
@@ -351,11 +442,27 @@ export function registerHerdrTools(
 			const nameCheck = checkAgentName(params.name);
 			if (nameCheck.denied) throw new HerdrError(nameCheck.reason ?? "invalid agent name", { code: "invalid_name" });
 
-			const caller = await callerPane(signal);
-			const { direction, reason } = await resolveSplitDirection(params.direction, caller.paneId, signal);
-			const cwd = params.cwd ?? caller.cwd;
+			const source = await sourcePane(params, signal);
+			const { direction, reason } = await resolveSplitDirection(
+				params.direction,
+				source.paneId,
+				source.machine,
+				signal,
+			);
+			const cwd = params.cwd ?? source.cwd;
 			const splitPayload = await callHerdr(
-				{ args: paneSplitArgs({ direction, cwd, focus: false }), signal },
+				{
+					args: withMachine(
+						source.machine,
+						paneSplitArgs({
+							direction,
+							cwd,
+							focus: false,
+							paneId: source.machine ? source.paneId : null,
+						}),
+					),
+					signal,
+				},
 				SPLIT_TIMEOUT_MS,
 			);
 			const paneId = extractPaneId(splitPayload);
@@ -368,7 +475,10 @@ export function registerHerdrTools(
 			try {
 				startPayload = await callHerdr(
 					{
-						args: agentStartArgs({ name: params.name, kind: params.kind, paneId, timeoutMs: params.timeoutMs }),
+						args: withMachine(
+							source.machine,
+							agentStartArgs({ name: params.name, kind: params.kind, paneId, timeoutMs: params.timeoutMs }),
+						),
 						signal,
 					},
 					startBudget + SPLIT_TIMEOUT_MS,
@@ -381,13 +491,14 @@ export function registerHerdrTools(
 					kind: params.kind,
 					direction,
 					cwd,
+					machine: source.machine,
 					ready: false,
 					status: null,
 					error: failure,
 				};
 				const text = [
 					`New pane: ${paneId}`,
-					`Pane was created (${direction}, ${reason}) but agent start failed.`,
+					`Pane was created (${direction}, ${reason})${source.machine ? ` on ${source.machine}` : ""} but agent start failed.`,
 					`Code: ${failure.code ?? "unknown"}`,
 					`Message: ${failure.message}`,
 					`The pane still exists. Read it with herdr_agent_read before retrying, and close it with herdr_cli ["pane","close","${paneId}"] only if you created it and the handoff is abandoned.`,
@@ -403,6 +514,7 @@ export function registerHerdrTools(
 					kind: params.kind,
 					direction,
 					cwd,
+					machine: source.machine,
 					ready: false,
 					status: null,
 				};
@@ -416,7 +528,7 @@ export function registerHerdrTools(
 			const readiness = spawnReadiness(view);
 			const summary = [
 				`New pane: ${paneId}`,
-				`Agent ${params.name} (${params.kind}); split ${direction} (${reason}).`,
+				`Agent ${params.name} (${params.kind}); split ${direction} (${reason})${source.machine ? ` on ${source.machine}` : ""}.`,
 				describeAgentView(view),
 			].join("\n");
 			const structured = {
@@ -425,6 +537,7 @@ export function registerHerdrTools(
 				kind: params.kind,
 				direction,
 				cwd,
+				machine: source.machine,
 				ready: readiness.ready,
 				status: view.status,
 			};
@@ -439,7 +552,7 @@ export function registerHerdrTools(
 		name: "herdr_agent_get",
 		label: "Herdr: Get agent",
 		description:
-			'Read one Herdr agent\'s normalized state: name, kind, status, cwd, interactive_ready, launch_pending, completion_seq, state_change_seq, and the agent session path. Missing optional fields become null or "unknown" instead of false; completion_seq is 0 until a turn completes.',
+			'Read one Herdr agent\'s normalized state: name, kind, status, cwd, interactive_ready, launch_pending, completion_seq, state_change_seq, and the agent session path. Missing optional fields become null or "unknown" instead of false; completion_seq is 0 until a turn completes. Pass machine for a saved host.',
 		promptSnippet: "Read a Herdr agent's status and sequences",
 		promptGuidelines: [
 			"Use herdr_agent_get before prompting or reporting progress; do not infer state from sidebar order.",
@@ -450,13 +563,15 @@ export function registerHerdrTools(
 		exposure,
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal) {
-			const view = await readAgent(params.target, signal);
+			const machine = params.machine?.trim() || null;
+			const view = await readAgent(params.target, machine, signal);
 			const structured = {
 				paneId: view.paneId,
 				name: view.name,
 				kind: view.kind,
 				status: view.status,
 				cwd: view.cwd,
+				machine,
 				interactiveReady: view.interactiveReady,
 				launchPending: view.launchPending,
 				completionSeq: view.completionSeq,
@@ -473,7 +588,7 @@ export function registerHerdrTools(
 		name: "herdr_agent_prompt",
 		label: "Herdr: Prompt agent",
 		description:
-			"Submit text to an idle or done Herdr agent without --wait, then re-read it after 3 seconds to report whether activity was observed. Refuses blocked, working, and unknown targets so a live turn cannot be clobbered. Returns submitted, startObserved, and the sequence values on both sides of the probe.",
+			"Submit text to an idle or done Herdr agent without --wait, then re-read it after 3 seconds to report whether activity was observed. Refuses blocked, working, and unknown targets so a live turn cannot be clobbered. Returns submitted, startObserved, and the sequence values on both sides of the probe. Pass machine for a saved host.",
 		promptSnippet: "Submit a prompt to an idle Herdr agent",
 		promptGuidelines: [
 			"Use herdr_agent_prompt for handoff delivery. It never waits for the target: ownership transfers immediately.",
@@ -488,24 +603,28 @@ export function registerHerdrTools(
 			const textCheck = checkPromptText(params.text);
 			if (textCheck.denied) throw new HerdrError(textCheck.reason ?? "invalid prompt text", { code: "invalid_text" });
 
-			const before = await readAgent(params.target, signal);
+			const machine = params.machine?.trim() || null;
+			const before = await readAgent(params.target, machine, signal);
 			const gate = gatePromptTarget(before);
 			if (!gate.allow) throw new HerdrError(gate.reason ?? "target is not promptable", { code: "not_promptable" });
 
-			await callHerdr({ args: agentPromptArgs(params.target, params.text), signal }, PROMPT_TIMEOUT_MS);
+			await callHerdr(
+				{ args: withMachine(machine, agentPromptArgs(params.target, params.text)), signal },
+				PROMPT_TIMEOUT_MS,
+			);
 			await sleep(SUBMISSION_PROBE_MS, signal);
 
 			let after: AgentView | null = null;
 			let probeError: { code: string | null; message: string } | null = null;
 			try {
-				after = await readAgent(params.target, signal);
+				after = await readAgent(params.target, machine, signal);
 			} catch (error) {
 				probeError = describeError(error);
 			}
 
 			const observed = startObserved(sequencesOf(before), after ? sequencesOf(after) : null);
 			const lines = [
-				`Submitted to ${params.target}: ${params.text.length} characters (no --wait).`,
+				`Submitted to ${params.target}${machine ? ` on ${machine}` : ""}: ${params.text.length} characters (no --wait).`,
 				observed === null
 					? `Activity probe inconclusive: could not re-read the agent after ${SUBMISSION_PROBE_MS}ms (${probeError?.message ?? "no data"}). Read the pane before resubmitting.`
 					: observed
@@ -521,6 +640,7 @@ export function registerHerdrTools(
 				probeMs: SUBMISSION_PROBE_MS,
 				status: after?.status ?? null,
 				paneId: after?.paneId ?? before.paneId,
+				machine,
 				stateChangeSeqBefore: before.stateChangeSeq,
 				stateChangeSeqAfter: after?.stateChangeSeq ?? null,
 			};
@@ -532,7 +652,7 @@ export function registerHerdrTools(
 		name: "herdr_agent_read",
 		label: "Herdr: Read agent pane",
 		description:
-			"Read terminal output from a Herdr agent pane. Defaults to source recent-unwrapped with 120 rows, which may only cover the viewport; request more rows for scrollback. Output is truncated for the model, and the detail carries the full length.",
+			"Read terminal output from a Herdr agent pane. Defaults to source recent-unwrapped with 120 rows, which may only cover the viewport; request more rows for scrollback. Output is truncated for the model, and the detail carries the full length. Pass machine for a saved host.",
 		promptSnippet: "Read output from a Herdr agent pane",
 		promptGuidelines: [
 			"Use herdr_agent_read to see where an agent is stuck; prefer the agent session path from herdr_agent_get when a lossless transcript is needed.",
@@ -543,10 +663,11 @@ export function registerHerdrTools(
 		exposure,
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal) {
+			const machine = params.machine?.trim() || null;
 			const source = params.source ?? "recent-unwrapped";
 			const lines = Math.max(1, Math.floor(params.lines ?? 120));
 			const outcome = await runHerdr({
-				args: agentReadArgs(params.target, source, lines),
+				args: withMachine(machine, agentReadArgs(params.target, source, lines)),
 				signal,
 				timeoutMs: 30_000,
 			});
@@ -568,6 +689,7 @@ export function registerHerdrTools(
 				chars: body.fullLength,
 				text: body.text,
 				truncated: body.truncated,
+				machine,
 			};
 			return textResult(state, body.text || "(no output)", structured, structured);
 		},
@@ -577,7 +699,7 @@ export function registerHerdrTools(
 		name: "herdr_cli",
 		label: "Herdr: CLI",
 		description:
-			"Run any other herdr subcommand with an argv array (no shell) and return stdout, stderr, exit code, and parsed JSON. Blocks a bare invocation, server stop, update, and workspace close --group. Use it for actions the other herdr tools do not cover, and include --machine when the target is a saved remote host.",
+			"Run any other herdr subcommand with an argv array (no shell) and return stdout, stderr, exit code, and parsed JSON. Blocks a bare invocation, server stop, update, and workspace close --group, also behind global options such as --machine. Use it for actions the other herdr tools do not cover, and include --machine when the target is a saved remote host.",
 		promptSnippet: "Run a herdr subcommand the other tools do not cover",
 		promptGuidelines: [
 			"Read the contract with `herdr --skill` before relying on flags that the dedicated herdr tools do not expose.",
