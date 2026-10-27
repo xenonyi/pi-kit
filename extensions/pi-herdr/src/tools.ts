@@ -28,6 +28,7 @@ import {
 	checkSplitTarget,
 	chooseSplitDirection,
 	MAX_PROMPT_TEXT_CHARS,
+	passthroughArgs,
 	paneSplitArgs,
 	READ_SOURCES,
 	type SplitDirection,
@@ -339,8 +340,9 @@ const AgentReadOutput = Type.Object({
 const PassthroughParameters = Type.Object({
 	args: Type.Array(Type.String(), {
 		description:
-			'Arguments after the herdr binary, for example ["pane","list"]. No shell is involved, so no quoting is needed. Include --machine (before the subcommand) when the target is a saved remote host.',
+			'Arguments after the herdr binary, for example ["pane","list"]. No shell is involved, so no quoting is needed. Leave --machine out of args and pass machine instead.',
 	}),
+	machine: MachineParameter,
 	json: Type.Optional(Type.Boolean({ description: "Parse stdout as JSON when possible. Defaults to true." })),
 	timeoutMs: Type.Optional(
 		Type.Number({ description: "Call timeout in milliseconds. Defaults to 20000; long waits need a larger value." }),
@@ -349,6 +351,7 @@ const PassthroughParameters = Type.Object({
 
 const PassthroughOutput = Type.Object({
 	args: Type.Array(Type.String()),
+	machine: NullableString,
 	exitCode: NullableNumber,
 	timedOut: Type.Boolean(),
 	stdoutChars: Type.Number(),
@@ -699,7 +702,7 @@ export function registerHerdrTools(
 		name: "herdr_cli",
 		label: "Herdr: CLI",
 		description:
-			"Run any other herdr subcommand with an argv array (no shell) and return stdout, stderr, exit code, and parsed JSON. Blocks a bare invocation, server stop, update, and workspace close --group, also behind global options such as --machine. Use it for actions the other herdr tools do not cover, and include --machine when the target is a saved remote host.",
+			"Run any other herdr subcommand with an argv array (no shell) and return stdout, stderr, exit code, and parsed JSON. Blocks a bare invocation, server stop, update, and workspace close --group, also behind global options such as --machine. Use it for actions the other herdr tools do not cover, and pass machine when the target is a saved remote host.",
 		promptSnippet: "Run a herdr subcommand the other tools do not cover",
 		promptGuidelines: [
 			"Read the contract with `herdr --skill` before relying on flags that the dedicated herdr tools do not expose.",
@@ -710,15 +713,18 @@ export function registerHerdrTools(
 		exposure,
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal) {
-			const denial = checkPassthrough(params.args, process.env.HERDR_PANE_ID);
+			const forwarded = passthroughArgs(params.machine, params.args);
+			if (!forwarded.ok) throw new HerdrError(forwarded.reason, { code: "invalid_arguments" });
+
+			const denial = checkPassthrough(forwarded.args, process.env.HERDR_PANE_ID);
 			if (denial.denied) throw new HerdrError(denial.reason ?? "refused", { code: "refused" });
 
-			const outcome = await runHerdr({ args: params.args, signal, timeoutMs: params.timeoutMs });
+			const outcome = await runHerdr({ args: forwarded.args, signal, timeoutMs: params.timeoutMs });
 			const parsed = params.json === false ? undefined : parseJson(outcome.stdout);
 			const stdout = truncateText(outcome.stdout.trimEnd());
 			const stderr = truncateText(outcome.stderr.trimEnd(), 4_000);
 			const text = [
-				`herdr ${params.args.join(" ")}`,
+				`herdr ${forwarded.args.join(" ")}`,
 				`exit: ${outcome.exitCode ?? "signal"}${outcome.timedOut ? " (timed out)" : ""}`,
 				stdout.text ? `\nstdout:\n${stdout.text}` : "",
 				stderr.text ? `\nstderr:\n${stderr.text}` : "",
@@ -726,7 +732,8 @@ export function registerHerdrTools(
 				.filter(Boolean)
 				.join("\n");
 			const structured = {
-				args: params.args,
+				args: forwarded.args,
+				machine: forwarded.machine,
 				exitCode: outcome.exitCode,
 				timedOut: outcome.timedOut,
 				stdoutChars: stdout.fullLength,

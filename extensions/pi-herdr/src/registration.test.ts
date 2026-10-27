@@ -124,7 +124,7 @@ test("every tool is sequential and documents its parameters", () => {
 			"pane",
 			"timeoutMs",
 		]);
-		assert.deepEqual(byName.get("herdr_cli")?.parameterKeys.sort(), ["args", "json", "timeoutMs"]);
+		assert.deepEqual(byName.get("herdr_cli")?.parameterKeys.sort(), ["args", "json", "machine", "timeoutMs"]);
 	} finally {
 		loaded.restore();
 	}

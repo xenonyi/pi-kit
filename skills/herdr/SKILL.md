@@ -32,7 +32,16 @@ description: Herdr 操作入口：控制 pane、tab、workspace 与 pane 内的 
 
 - 远端 `--current` 不成立：`herdr_pane_split` / `herdr_agent_spawn` 必须同时传 `pane`（那台机器上的 pane id），cwd 默认取该 pane 的 `pane get` 结果。
 - ID 与 agent 名是各机器自己的，两台都可能有 `w1:p1`；返回体里的 `machine` 字段说明这次落在哪。
-- 工具只覆盖 pane / agent 动作。`worktree create`、`notification`、`pane close` 等仍走 `herdr_cli` 并自带 `--machine`。
+- 工具只覆盖 pane / agent 动作。`worktree create`、`notification`、`pane close` 等仍走 `herdr_cli`，远端同样传 `machine` 参数。
+## 在远程空闲 pane 上跑 shell 命令
+
+没有对应工具，走 `herdr_cli` 三步，远端传 `machine` 参数（工具会把它前置）。
+
+1. **挑 pane**：`pane list` 看 `agent_status`。它不是 `unknown`、或 `pane read` 里是 agent TUI 而不是 shell 提示符 → 这个 pane 不空闲，别往里敲字。
+2. **跑**：`pane run <paneId> "<command>"`——整条命令当一个 argv 传，自己拼引号只会错两次。空返回只说明**已入队**，不说明已执行；`pane run` 不换目录，要换就在命令里 `cd`。
+3. **收结果**：`pane read <paneId> --source recent-unwrapped --lines 60`。要阻塞等就 `pane wait-output <paneId> --match <text> --timeout <ms>`，但它会**立刻搜已有输出**，别拿旧输出里也出现过的词当判据。
+
+要独占的 shell 就 `herdr_pane_split` 另开一个（默认 `--no-focus`），别占别人正在用的 pane；用完只关自己建的。
 
 ## 硬规则
 
@@ -41,4 +50,5 @@ description: Herdr 操作入口：控制 pane、tab、workspace 与 pane 内的 
 - **不靠省略参数探路**：`herdr workspace create`、`herdr worktree create` 这类「看起来像帮助」的裸调用会**真的执行**。
 - **id 只从返回值取**：`structuredContent`（脚本调用时）或 `details`。不要从正文正则抓，也不要从 sidebar 顺序推测——本仓库曾因此关掉自己的 pane。
 - **`blocked` 一律问用户**：Herdr 认出了审批或提问界面，不代答。
+- **`pane run` 不是「执行」而是往别人的终端敲字**：确认是 shell 提示符再复用，否则宁可 `herdr_pane_split` 新开。敲进 agent TUI 就等于给它发 prompt，敲进 `blocked` 的界面就等于代答。
 - 本文件只写判断；命令细节以 `herdr --skill` 和二进制为准。

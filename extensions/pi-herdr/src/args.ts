@@ -162,6 +162,44 @@ export function withMachine(machine: string | null | undefined, args: string[]):
 	return label ? ["--machine", label, ...args] : args;
 }
 
+export type PassthroughTarget =
+	| { ok: true; args: string[]; machine: string | null }
+	| { ok: false; reason: string };
+
+/**
+ * `--machine` is a global option, so `herdr pane list --machine box` fails with
+ * `unknown option: --machine` — an error that never says "move it to the front".
+ * The passthrough therefore takes `machine` like every other tool, and rejects
+ * the two shapes it cannot resolve: the flag written after the subcommand, and
+ * the flag written twice.
+ *
+ * When the flag arrives first (the older call shape) it is forwarded untouched,
+ * but the machine it names is still reported: the returned `machine` means
+ * "the host this call actually reached", not "the parameter that was set".
+ * Reporting null there would be half-true data — the same bug class as
+ * mapping a missing `interactive_ready` to false.
+ */
+export function passthroughArgs(machine: string | null | undefined, args: string[]): PassthroughTarget {
+	const label = machine?.trim() || null;
+	const written = args.indexOf("--machine");
+
+	if (label && written !== -1) {
+		return {
+			ok: false,
+			reason:
+				"Pass the saved host either as `machine` or as --machine inside args, not both: the two would name different sessions.",
+		};
+	}
+	if (written > 0) {
+		return {
+			ok: false,
+			reason: `--machine must come before the subcommand: herdr rejects \`${args[0]} … --machine <host>\` with "unknown option: --machine". Pass machine instead, or move --machine to the front of args.`,
+		};
+	}
+	if (!label) return { ok: true, args, machine: stripGlobalOptions(args).machine };
+	return { ok: true, args: withMachine(label, args), machine: label };
+}
+
 /**
  * `--current` resolves only inside the calling session. A saved machine shares
  * no caller context, so a remote split must name its pane.

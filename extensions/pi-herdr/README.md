@@ -12,8 +12,11 @@
 | `herdr_agent_get` | 归一化读取 name/kind/status/cwd/`completion_seq`/`state_change_seq` 与 agent session 路径 |
 | `herdr_agent_prompt` | 不带 `--wait` 投递，3 秒后复查并返回 `startObserved`；只接受 `idle` 或 `done` |
 | `herdr_agent_read` | 读 pane 输出，默认 `recent-unwrapped` 120 行 |
-| `herdr_cli` | 其余子命令透传，参数是 argv 数组（不经 shell） |
+| `herdr_cli` | 其余子命令透传，参数是 argv 数组（不经 shell）；远端传 `machine`，别把 `--machine` 写进 args |
 
+`--machine` 是 herdr 的全局选项，`herdr pane list --machine box` 会被二进制以 `unknown option: --machine` 拒掉，而那句话不会告诉你该往前挪。所以 `herdr_cli` 和其余工具一样接受 `machine` 参数，由工具负责前置；args 里把 `--machine` 写在子命令之后、或与 `machine` 同时给，都直接报错而不是发出去。
+
+返回值里的 `machine` 是这次调用**实际落到的机器**：`--machine` 写在 args 首位时也会回填，不会给出 `null`——否则读返回值的人会以为调用留在本机。
 `herdr_cli` 的 `json` 默认为 `true`：stdout 是 JSON 时一并返回解析结果；超过 40 000 字符截断并在 `details` 里给出原始长度。
 
 ## 配置
@@ -31,11 +34,11 @@
 - **方向推导有下限**：每一半至少 40 列或 8 行，否则拒绝并说明，不产出不可用的窄列。
 - **投递后复查**：`herdr_agent_prompt` 提交后固定等 3 秒重读，状态序列增长即 `startObserved=true`。`false` 只表示「没看到活动」，不代表文本没送到；要读屏再决定是否重发。
 - **透传黑名单**：空参数（`herdr` 裸跑会启动/附加 TUI）、`server stop`、`update`、`workspace close --group` 一律拒绝并说明原因；其余放行。
-- **跨机**：5 个语义工具都接受可选 `machine`（`herdr machine list` 的 label 或 id），整次调用加 `--machine`。远端 `--current` 不成立，所以 `herdr_pane_split` / `herdr_agent_spawn` 必须同时传 `pane`，cwd 默认取该 pane 的 `pane get`。`worktree create`、`notification`、`pane close` 仍走 `herdr_cli` 并自带 `--machine`。
+- **跨机**：6 个工具都接受可选 `machine`（`herdr machine list` 的 label 或 id），整次调用加 `--machine`。远端 `--current` 不成立，所以 `herdr_pane_split` / `herdr_agent_spawn` 必须同时传 `pane`，cwd 默认取该 pane 的 `pane get`。`worktree create`、`notification`、`pane close` 走 `herdr_cli` 时同样传 `machine`。
 - **id 不进正文**：会返回标识符的工具都声明了 `outputSchema` 并返回 `structuredContent`，脚本（codemode）拿到的就是对象；**不要**从文本里正则抓 id——曾因此把调用方自己的 pane 关掉。
 - **并发**：6 个工具都是 `executionMode: "sequential"`，避免同一批调用里的两个 split 互相破坏布局。
 - **测试**：纯函数层（argv 构造、归一化、状态门）用 `node:test`：
 
 ```sh
-node --test extensions/pi-herdr/src/args.test.ts extensions/pi-herdr/src/normalize.test.ts extensions/pi-herdr/src/gates.test.ts
+node --test extensions/pi-herdr/src/*.test.ts
 ```

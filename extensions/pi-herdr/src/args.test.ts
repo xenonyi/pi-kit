@@ -11,6 +11,7 @@ import {
 	chooseSplitDirection,
 	MAX_PROMPT_TEXT_CHARS,
 	checkSplitTarget,
+	passthroughArgs,
 	withMachine,
 	stripGlobalOptions,
 	paneSplitArgs,
@@ -210,4 +211,38 @@ test("checkAgentName enforces the documented pattern", () => {
 	assert.equal(checkAgentName("1handoff").denied, true);
 	assert.equal(checkAgentName("handoff_agent-2").denied, false);
 	assert.equal(checkAgentName("a".repeat(33)).denied, true);
+});
+
+test("passthroughArgs prefixes the host and leaves local argv alone", () => {
+	assert.deepEqual(passthroughArgs(undefined, ["pane", "list"]), {
+		ok: true,
+		args: ["pane", "list"],
+		machine: null,
+	});
+	assert.deepEqual(passthroughArgs(" gpuserver ", ["pane", "list"]), {
+		ok: true,
+		args: ["--machine", "gpuserver", "pane", "list"],
+		machine: "gpuserver",
+	});
+});
+
+test("passthroughArgs rejects a misplaced --machine", () => {
+	const misplaced = passthroughArgs(undefined, ["pane", "list", "--machine", "box"]);
+	assert.equal(misplaced.ok, false);
+	assert.match(misplaced.ok === false ? misplaced.reason : "", /must come before the subcommand/);
+
+	// Already in place: herdr accepts it, so the argv is forwarded untouched —
+	// but the host it names is still reported, or the caller would read null and
+	// believe the call stayed local.
+	assert.deepEqual(passthroughArgs(undefined, ["--machine", "box", "pane", "list"]), {
+		ok: true,
+		args: ["--machine", "box", "pane", "list"],
+		machine: "box",
+	});
+});
+
+test("passthroughArgs refuses machine and --machine together", () => {
+	const both = passthroughArgs("box", ["--machine", "other", "pane", "list"]);
+	assert.equal(both.ok, false);
+	assert.match(both.ok === false ? both.reason : "", /not both/);
 });
