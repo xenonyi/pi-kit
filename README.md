@@ -15,7 +15,6 @@ pnpm tsc         # 类型检查
 
 | 扩展 | 说明 | 文档 |
 | --- | --- | --- |
-| `pi-ask-user-question` | `ask_user_question` 工具：向用户提一个阻塞问题（自由文本 / 单选 / 多选），仅在 TUI 会话声明 | [README](./extensions/pi-ask-user-question/README.md) |
 | `pi-btw` | `/btw` 命令：不污染会话历史的旁支提问，答案只在临时面板，仅在 TUI 会话注册 | [README](./extensions/pi-btw/README.md) |
 | `pi-herdr` | Herdr 机械层：拆 pane、起 agent、归一化状态读取与透传；只在 herdr pane 内声明 | [README](./extensions/pi-herdr/README.md) |
 | `pi-hashline-edit` | `hash_read` / `hash_edit`：行锚点 + sha256 revision 校验的读取与原子行编辑 | [README](./extensions/pi-hashline-edit/README.md) |
@@ -33,7 +32,7 @@ pnpm tsc         # 类型检查
 
 `rules/` 存 Markdown 规则片段，由 `pi-rules` 按 `os` / `host` / `cwd` / `tools` 条件注入系统提示词：
 
-- `rules/shared/` — 所有机器通用（`00-authorization.md`、`10-preferences.md`、`20-web.md`）
+- `rules/shared/` — 所有机器通用（`00-authorization.md`、`10-preferences.md`、`15-questions.md`、`20-web.md`）；提问通过普通聊天进行，一次一问并等待回答，不使用弹窗
 - `rules/machines/` — 按机器条件生效（`windows.md`）
 
 ## 开发
