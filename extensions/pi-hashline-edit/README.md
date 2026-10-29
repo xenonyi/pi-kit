@@ -42,5 +42,3 @@
 - 折叠时 `hash_read` 不显示输出；`hash_edit` 只显示实际应用的 `+N / -M`，`changed: false` 时显示 `unchanged`
 - 展开时显示 `details.text`：`hash_read` 为锚点行与截断/续读提示，`hash_edit` 先给增删统计再给改动处附近的 20 行
 - 失败时以 error 色显示结果文本
-
-因为定义了 `renderCall` / `renderResult`，这两张卡片也能被 `pi-fold-runs` 折叠成一行。

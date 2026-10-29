@@ -17,7 +17,6 @@ pnpm tsc         # 类型检查
 | --- | --- | --- |
 | `pi-ask-user-question` | `ask_user_question` 工具：向用户提一个阻塞问题（自由文本 / 单选 / 多选），仅在 TUI 会话声明 | [README](./extensions/pi-ask-user-question/README.md) |
 | `pi-btw` | `/btw` 命令：不污染会话历史的旁支提问，答案只在临时面板，仅在 TUI 会话注册 | [README](./extensions/pi-btw/README.md) |
-| `pi-fold-runs` | 把每张工具卡折叠成一行原生渲染，点击或 `Ctrl+O` 展开回 Pi 原生卡；只用公开的 `registerToolRenderer`，仅 TUI 生效 | [README](./extensions/pi-fold-runs/README.md) |
 | `pi-herdr` | Herdr 机械层：拆 pane、起 agent、归一化状态读取与透传；只在 herdr pane 内声明 | [README](./extensions/pi-herdr/README.md) |
 | `pi-hashline-edit` | `hash_read` / `hash_edit`：行锚点 + sha256 revision 校验的读取与原子行编辑 | [README](./extensions/pi-hashline-edit/README.md) |
 | `pi-lsp` | 按文件扩展名路由语言服务器，提供 `lsp_diagnostics` 与 `lsp_fix` | [README](./extensions/pi-lsp/README.md) |
