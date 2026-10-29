@@ -33,3 +33,14 @@
 - 校验项：revision 必须是最新（`STALE_FILE`）、行号在范围内且行哈希匹配（`ANCHOR_MISMATCH`）、区间不重叠、起点不重复（含 `BOF` 与第 1 行）；不做模糊匹配
 - 保留 BOM 与换行约定；返回最终 revision、`changed`、`firstChangedLine`、`editCount`、`deletedLines`、`insertedLines`，以及最早改动处附近最多 20 行
 - 成功后旧 revision 与旧锚点立即失效：同一文件的下一次编辑要用新 revision
+
+## 渲染
+
+两个工具都带自己的卡片渲染（`src/renderers.ts`），形状与内置 `read` / `edit` 一致：
+
+- 调用行只有一行：`hash_read <path>:12-21` / `hash_edit <path>`；路径用 accent 色，home 目录缩写为 `~`
+- 折叠时 `hash_read` 不显示输出；`hash_edit` 只显示实际应用的 `+N / -M`，`changed: false` 时显示 `unchanged`
+- 展开时显示 `details.text`：`hash_read` 为锚点行与截断/续读提示，`hash_edit` 先给增删统计再给改动处附近的 20 行
+- 失败时以 error 色显示结果文本
+
+因为定义了 `renderCall` / `renderResult`，这两张卡片也能被 `pi-fold-runs` 折叠成一行。

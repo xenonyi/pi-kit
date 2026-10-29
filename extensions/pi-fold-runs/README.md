@@ -1,29 +1,28 @@
 # pi-fold-runs
 
-把一段连续的工具调用折成一行摘要，thinking 只计数、不再单独占行：
+每次工具调用都是一张独立的 Pi 原生卡片，默认折叠成 **1 行**。只通过 Pi 公开的 `pi.registerToolRenderer` 接入，不修改任何 Pi 类、不读取私有字段。
 
-```text
- 帮我看看这个渲染补丁挂在哪
- 行，我先读一遍组件
-▸ 6 calls · powershell×3 read×1 grep×1 hash_edit×1 · ✻ 3 thoughts · 4.8s
-```
+## 展示与操作
 
-## 使用
+- **折叠**：保留 Pi 原生 `renderCall` 的第一行可见内容。默认外壳下的背景、横向 padding、上下留白和卡片间距由 Pi 提供；`renderShell: "self"` 的工具（如 `edit`）自绘外壳，折叠行自带背景与 padding，并保留它自己的上下留白行，看起来仍是「空行 / 内容 / 空行」。
+- **展开**：点击折叠行的任意位置，或按 `Ctrl+O` 全部展开。展开后 call 与 result 都直接交回 Pi 原生 renderer，宽度、padding、diff、图片均不改动。
+- **收起**：再次点击或 `Ctrl+O`，卡片回到一行。
+- **`/fold`**：显示折叠开关、pinned 工具、Pi 版本、配置来源，以及哪些卡片不折叠。
 
-点击摘要行**逐级展开**：组先展开成「每个调用一行」，点某个调用自己的行，它会展开成 Pi 的原生卡（首行是状态条：` ├ ▾` + 异常状态，卡内自带原生 call 行，命令只出现一次）；点状态条或卡内内容收起，变回紧凑行（组仍停在展开态）。要收回整组就点 `▾` 摘要行；`Ctrl+O` 一次性全开/全收。
+`codemode` 在原生标题后追加实际发起的嵌套调用，例如 `codemode · read×2 powershell×1`：
 
-```text
-▾ 6 calls · powershell×3 read×1 grep×1 hash_edit×1 · ✻ 3 thoughts · 4.8s
- ├ ▸ read  extensions/pi-fold-runs/src/state.ts             0.2s
- ├ ▾                                     ← 卡的首行：状态条（卡底色）
- │    grep  toolName                      ← Pi 原生 call 行，文字与上面的调用名对齐
- │    …（卡内是 Pi 原生结果）
- ├ ▸ powershell  pnpm tsc +1                             ✗ 12.4s
- └ ▸ hash_edit  extensions/pi-fold-runs/src/state.ts +2     0.1s
-```
+- 从 `result.details.calls` 统计，按首次发起顺序列出每种调用的次数；循环和动态调用按实际次数计数，不从脚本文本猜测。
+- 包括已发起但失败或取消的调用，以及 `models.*`；尚无调用时显示 `0 calls`。
+- 结果到达后触发一次重绘，因此这一行会从 `codemode` 变成 `codemode · read×N`。仍只占一行，放不下时按宽度截断。
 
-- `Ctrl+O`：一次性全开/全收。
-- `/fold`：显示当前生效范围、运行的 Pi 版本、结构探针是否已把补丁关掉，以及使用的配置文件。
+## 不折叠的情况
+
+| 情况 | 原因 |
+| --- | --- |
+| 同时缺少 `renderCall` 或 `renderResult` 的工具 | 公开 API 拿不到 Pi 的原生回退行，折叠后无法正确隐藏结果，因此整张卡交给 Pi |
+| `renderCall` 输出里含图片协议（`\x1b_G`、`\x1b]1337;File=`） | 图片需要它覆盖的空白行，不能只留一行 |
+| `pinned` 里的工具 | 例如 `ask_user_question`：提问答案无需展开即可见 |
+| 结果里的图片 | Pi 在 renderer 之外追加图片，折叠卡下方仍会显示图片 |
 
 ## 配置
 
@@ -36,72 +35,33 @@
 ```json
 {
   "enabled": true,
-  "autoDisableOnUnknownVersion": true,
-  "pinned": ["ask_user_question"],
-  "showRunning": true,
-  "showErrors": true,
-  "gap": 1
+  "pinned": ["ask_user_question"]
 }
 ```
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 总开关；`false` 时完全交回 Pi 渲染 |
-| `autoDisableOnUnknownVersion` | `true` | 运行的 Pi 不在受测版本行（`1.4.x`）时直接交回 Pi 渲染；确认新版没问题后设成 `false` 可强制保持折叠 |
-| `pinned` | `["ask_user_question"]` | 永不折叠的工具名；同时切断当前分组 |
-| `showRunning` | `true` | 摘要行里显示 `running <tool>` |
-| `showErrors` | `true` | 折叠态为每个失败调用保留一行 |
-| `gap` | `1` | 组上方的空行数（0–4）；下方自动少 1 行（下一条消息自带 1 行间距），两侧看起来才一样宽 |
+| `pinned` | `["ask_user_question"]` | 不折叠这些工具的原生卡片 |
 
-配置在会话开始时读取，改动后运行 `/reload` 或重开会话。配置写错时整份配置被忽略并提示，回退到默认值。
+配置在会话开始时读取，修改后 `/reload` 或重开会话即可生效，无需重启。未知键一律忽略，旧配置里的 `autoDisableOnUnknownVersion`、`showRunning`、`showErrors`、`gap` 都已失效。配置错误时提示并回退默认值。
 
-## 行为
+## 从原型补丁迁移
 
-- **仅 TUI 激活**：以 `ctx.mode === "tui"` 为准；RPC、JSON、print 模式不读取配置、不安装原型补丁，也不注册 `/fold` 命令。
-- **level 0（默认）**：整段只剩一行摘要（无背景，靠上下空行分隔）：调用数、按工具名分组的计数、thinking 段数、失败数、总耗时或当前运行中的工具；失败时下面跟 `✗ <tool> failed · 1.8s`。
-- **level 1（点摘要行）**：`▸` 变 `▾`，下面每个调用一行、相互紧贴：` ├ ▸ read  <参数预览>  0.2s`，最后一个用 `└`，失败在行尾标 `✗`。
-- **参数预览**：每行只显示一个主参数，其余只报个数：` ├ ▸ hash_read  extensions/pi-fold-runs/src/state.ts +2  0.2s`。主参数按参数名挑（`pattern`、`path`、`file`、`command`、`code`、`query`、`url`……，其余按字母序），值原样显示——不加引号、不转义（`\n`、`\"`、`\\` 这些噪声不再出现），换行与连续空白折成一个空格——最多 44 字，超长补 `…`；`null`/未设置的参数既不显示也不计数。`code` 参数里的脚本先抽 `tools.<name>` 调用清单（` ├ ▸ codemode  read×2 powershell`），抽不到才退回脚本首段。
-- **level 2（点某个调用行）**：这一行会展开成 Pi 的原生卡，**卡的首行是状态条**（` ├ ▾`/` └ ▾` + 右对齐的异常状态：图片 `▦` 放在最前，后面是失败 `✗ <耗时>`/`running`；成功不显示耗时），由 Pi 的顶部 padding 行改成、整行涂卡片底色；卡其余部分完全原生（call 行、结果、底部 padding），**卡底色缩进 3 列、从树干右侧开始**，树干留在普通背景上；卡内文字比卡底色再多缩进 1 列，**与上面的调用行工具名对齐**。点状态条或卡内内容收起，变回紧凑行。图片：序列行按文字列偏移，图片占用的空行保持空白（TUI 靠它计高），图片前那一行改成 ` ▦ image W×H` 图注（零额外行）；**图片与图注都在卡外（普通背景），仍与卡内文字同列**。
-- **图片标记**：结果里有终端能画的图片时，折叠行的状态列最前面多一个 `▦`（耗时/`✗` 仍在最右、与其他行对齐），展开后显示在状态条上；图片和一行 ` ▦ image W×H` 图注在卡外（普通背景），摘要行多一段 ` · ▦ N`（N = 整组图片张数）；终端不支持图片协议或 `showImages` 关闭时不显示（那时 Pi 只画文字占位）。
-- **失败**：level 0 每个失败调用一行，**紧跟在摘要行下面**（不会散落到组里）；level ≥1 折叠行行尾标 `✗ <耗时>`，展开后卡片变红、状态条上也是 `✗ <耗时>`；`showErrors: false` 只保留摘要里的 `N failed`。
-- **结果仍是 Pi 渲染**：展开后就是 Pi 的原生整块（含 call 行），diff 着色、`Ctrl+T` 的 thinking 设置都不变，只是卡底色缩进 3 列、卡内文字再多 1 列（图片行除外）。
-- **折叠只改变渲染**；模型始终收到完整内容，工具集、权限、缓存都不变。
-- 没有 `Thinking...` 残留：只思考（+ 调工具）的 assistant 消息在折叠态完全不绘制；只有组里一个工具都没有、且这条消息也没有文本时，才保留 Pi 的标签作为正在工作的信号。有文本的回复里 Pi 怎么画 thinking（标签或全文，看 `Ctrl+T`），这里就怎么画。
-- **间距**：组上方留 `gap` 个空行（默认 `1`），下方留 `gap - 1` 个——Pi 在它之后画的组件（消息、pinned 行）开头本来就有 1 行空行，照着上方再画同样多会显得下面更宽；调用行之间不再插空行，`├`/`└` 直接连成树干；展开的卡首行是状态条（顶替 Pi 的顶部 padding，不额外占行），卡内文字比卡底色多缩进 1 列；**相邻的两张卡之间留 1 行带竖线的普通空白**（` │`，卡底色断开、树干不断）；pinned 行保持 Pi 自己的间距。
+此前版本补丁 `ToolExecutionComponent.prototype.render`，因此能折叠 Pi 最终组装出的整张卡片，也包括 thinking 与调用段的联动。改用公开 API 后，以下能力被放弃：
 
-### 分组边界
+| 放弃 | 现在的行为 |
+| --- | --- |
+| thinking 随所属调用段隐藏、全部展开后恢复 | thinking 完全按 Pi 原生规则显示，可见性由 `Ctrl+T` 控制 |
+| 折叠时隐藏结果图片 | 图片仍在折叠行下方显示 |
+| 版本闸门与结构探针 | 不再依赖私有字段，因此不再需要锁定 `1.4.x` |
 
-一组 = 两个边界之间的全部工具调用。边界是：
+换来的好处：不碰 `ToolExecutionComponent` / `AssistantMessageComponent`，不再有 `as unknown as` 的私有字段读取，也不需要在别的扩展改写原型时重新抢回最外层。
 
-- 用户消息
-- 带可见文本的 assistant 消息（文本永远显示，所以你能看出回复有没有跑偏）
-- compaction / branch summary、skill invocation、扩展自定义消息、`!` 执行的 bash
+## 其它行为
 
-Pi 每个模型 step 都是独立的 assistant 消息，**只思考（+ 调工具）**的 step 不切断分组，包括回合末尾那条只有思考、既没文本也没工具调用的 step——所以一步一个工具的六个 step 仍然折成一行。
-
-### 不折叠的工具
-
-`pinned`（默认只有 `ask_user_question`）：保持 Pi 的原生行，并在它之前切断分组，保证顺序不乱。提问的答案必须直接可见，不能等展开；其它工具（包括 `edit`/`hash_edit`/`write` 的 diff）都折进摘要，`Ctrl+O` 或点摘要行再展开。
-
-## 版本护栏
-
-这个扩展依赖 Pi 组件的内部结构（见下方「实现方式」），而 Pi 的组件不是公开 API，`tsc` 也看不到这些字段——所有访问都走本地接口。所以三件事一起做：
-
-1. **受测版本行**：`src/version.ts` 声明 `1.4.x`。启动时用 Pi 导出的 `VERSION` 比对 major.minor；不在这一行就提示，并按 `autoDisableOnUnknownVersion` 直接交回 Pi 渲染（默认开）。
-2. **结构探针**：渲染前检查真正读的字段还在（`toolName`/`isPartial` 的类型、`setExpanded`、`ui.requestRender`、`lastMessage` 的形状）。任一项不符就整个进程关掉折叠并记下原因，`/fold` 会显示它。
-3. **退化优先**：探针通过但布局对不上时，一律交回 Pi 原生渲染（例如图片行位置对不上），不做「猜着画」。
-
-升级 Pi 后建议的检查顺序：`/fold` 是否报 untested → 展开一张卡看卡内文字是否与调用行同列 → 有图片的结果是否整块正常 → `Ctrl+O` 与点击是否还正常。
-
-## 实现方式
-
-Pi 没有 assistant/消息级的渲染扩展点（`registerToolRenderer` 只管工具的 call/result，`registerMessageRenderer` 只对自定义消息生效）。所以这个扩展和 pi-tidy 一样，直接包了两个组件的 `prototype.render`：
-
-- `ToolExecutionComponent` —— 每个工具调用一个实例。折叠态只由组内第一个成员画摘要行与失败行；组展开后，**未展开**的调用画自己的一行；某个调用展开后把 Pi 的原生 `render`（按内宽重排）接在下面，再把 Pi 的顶部 padding 行替换成状态条（` ├ ▾` + 异常状态，兼作收起热区）；树干在卡外，卡内文字与调用名同列——**缩进量不写死**：优先读 Pi 的 `outputPad`（0 或 1），字段没了就从 Pi 自己渲染出的行首空白推断，必要时按修正后的宽度再渲染一次；图片序列行与图注在卡外，按文字列偏移（图注尺寸读自 `imageComponents[].dimensions`，占几行读自该组件的 `render`）；相邻卡之间插一行普通树干分隔。
-- `AssistantMessageComponent` —— 负责一段思考。carrier 消息折叠态返回 `[]`，并把 thinking 段数记进当前组；有文本时作为边界。
-- `ToolExecutionComponent.prototype.handleMouse` —— 摘要行翻转整组，调用行翻转该调用的结果，结果块坐标平移后交回 Pi；转发期间开 pointer 作用域，让 `setExpanded` 补丁分清 `Ctrl+O` 和单行点击。
-- `UserMessageComponent`、`CustomMessageComponent`、`BashExecutionComponent`、`SkillInvocationMessageComponent`、`CompactionSummaryMessageComponent`、`BranchSummaryMessageComponent` —— 只标记边界，输出原样透传。
-
-两个组件类都是 `@earendil-works/pi-coding-agent` 的公开导出，且 Pi 的扩展加载器把这个包名别名到宿主自己的模块实例，所以打原型能作用到正在运行的 transcript。原型只补一次，配置存在 `Symbol.for("pi-fold-runs:runtime")` 的全局槽里，`/reload` 能作用到已经装好的补丁；探针失败的原因存在 `Symbol.for("pi-fold-runs:shape-problem")`，`/fold` 报得出来。
-
-分组在渲染时从 transcript 顺序推导，不持久化：重开会话时组件按同样顺序重建，分组自然一致。
+- 仅 TUI 激活；RPC、JSON、print 模式不读取配置，`enabled` 保持关闭，卡片与 HTML 导出沿用原生 renderer。
+- 只改变展示，工具执行、权限、模型收到的完整结果与缓存均不变。
+- `src/render.ts` 把原生组件通过 `lastComponent` 原样交回原生 renderer（Pi 会把我们的包装器传进去，而原生 renderer 会对其调用 `clear()`）。
+- 折叠时仍会调用原生 `renderResult`，只是丢弃它返回的行：`renderShell: "self"` 的工具靠它更新自己的标题背景（`edit` 出错时变红）。
+- `codemode` 的计数在 `renderResult` 里写入共享 `state`，并用 `queueMicrotask` 触发 `context.invalidate()`：渲染过程中同步 invalidate 会重入 `updateDisplay`，被打断的那一趟随后会重复插入子组件。

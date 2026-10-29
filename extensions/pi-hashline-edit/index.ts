@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatRead, readSnapshot } from "./src/reader.ts";
+import { hashEditRenderers, hashReadRenderers } from "./src/renderers.ts";
 import { editFile } from "./src/writer.ts";
 
 const Path = Type.String({ minLength: 1, description: "Existing file path, absolute or relative to the working directory." });
@@ -45,6 +46,8 @@ export default function hashlineEdit(pi: ExtensionAPI) {
 			const view = { path, ...formatRead(snapshot.document, snapshot.revision, params) };
 			return { content: [{ type: "text", text: view.text }], details: view, structuredContent: view };
 		},
+
+		...hashReadRenderers,
 	});
 
 	const spliceProperties = {
@@ -101,5 +104,7 @@ export default function hashlineEdit(pi: ExtensionAPI) {
 				`Edits: ${view.editCount}; deleted lines: ${view.deletedLines}; inserted lines: ${view.insertedLines}\n${view.text}`;
 			return { content: [{ type: "text", text }], details: view, structuredContent: { ...view, text } };
 		},
+
+		...hashEditRenderers,
 	});
 }
