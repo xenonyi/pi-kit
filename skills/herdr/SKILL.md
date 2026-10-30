@@ -21,7 +21,7 @@ description: Herdr 操作入口：控制 pane、tab、workspace 与 pane 内的 
 
 | 工具 | 用途 |
 | --- | --- |
-| `herdr_pane_split` | 拆调用方 pane，返回新 pane id；省略方向时按几何推导（宽→`right`，窄/高→`down`），默认 `--no-focus`、继承调用方 cwd |
+| `herdr_pane_split` | 拆调用方 pane，返回新 pane id；方向必须显式给，默认 `--no-focus`、继承调用方 cwd |
 | `herdr_agent_spawn` | 拆 pane + `agent start` + 就绪检查合成一步；启动不就绪也返回 pane id，从不重试 |
 | `herdr_agent_get` | 归一化状态：name/kind/status/cwd/`completion_seq`/`state_change_seq`/session path。缺失字段是 `null` 或 `"unknown"`，**不是 false** |
 | `herdr_agent_prompt` | 不带 `--wait` 投递，3 秒后返回 `startObserved`；只接受 `idle` / `done` |

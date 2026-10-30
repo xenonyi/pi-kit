@@ -28,6 +28,8 @@ pnpm tsc         # 类型检查
 - `skills/web-research` — 外部资料检索：选择 context7 / deepwiki / exa，核对正文、处理失败并标注来源。
 - `skills/herdr` — Herdr 操作入口：先查 `herdr_*` 工具，未覆盖的走 `herdr_cli` 透传，flag 以 `herdr --skill` 为准。
 - `skills/herdr-handoff` — 把任务连同上下文移交给另一个 Herdr agent pane；交完不等、不轮询。
+- `skills/herdr-app` — herdr-app 窗口 + herdr-core（`hc`）操作入口：干活走 `hc`，改 space / tab / pane 与焦点走 `herdr-app do`，开终端默认拆 pane；命令与参数运行时查 CLI。
+- `skills/herdr-app-handoff` — 把任务移交给 herdr-core 里的新终端 agent（或已有 idle agent），交完不等、不轮询；用 `--outlive-parent` + `terminal.keep` 保证用户能接管。
 
 ## 规则片段
 
