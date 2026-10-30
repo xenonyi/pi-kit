@@ -20,20 +20,21 @@ pnpm tsc         # 类型检查
 | `pi-hashline-edit` | `hash_read` / `hash_edit`：行锚点 + sha256 revision 校验的读取与原子行编辑 | [README](./extensions/pi-hashline-edit/README.md) |
 | `pi-lsp` | 按文件扩展名路由语言服务器，提供 `lsp_diagnostics` 与 `lsp_fix` | [README](./extensions/pi-lsp/README.md) |
 | `pi-mcp` | 从 `servers.json` 注册 MCP 服务器，缺环境变量的条目自动跳过 | [README](./extensions/pi-mcp/README.md) |
-| `pi-rules` | 把 `rules/` 下的 Markdown 片段按条件注入系统提示词 | [README](./extensions/pi-rules/README.md) |
+| `pi-rules` | 按环境条件注入 `rules/` 下的短规则，详细流程由 skill 按需加载 | [README](./extensions/pi-rules/README.md) |
 
 ## 技能
 
 - `skills/grill` — 分轮追问并压力测试计划、决定或想法，暴露重要未知后再执行。
+- `skills/web-research` — 外部资料检索：选择 context7 / deepwiki / exa，核对正文、处理失败并标注来源。
 - `skills/herdr` — Herdr 操作入口：先查 `herdr_*` 工具，未覆盖的走 `herdr_cli` 透传，flag 以 `herdr --skill` 为准。
 - `skills/herdr-handoff` — 把任务连同上下文移交给另一个 Herdr agent pane；交完不等、不轮询。
 
 ## 规则片段
 
-`rules/` 存 Markdown 规则片段，由 `pi-rules` 按 `os` / `host` / `cwd` / `tools` 条件注入系统提示词：
+`rules/` 存 Markdown 短规则，由 `pi-rules` 按 `os` / `host` / `cwd` / `tools` 条件注入系统提示词的 `<rules>` 段；详细流程放进 `skills/`，必要时由规则要求先读取对应 skill：
 
-- `rules/shared/` — 所有机器通用（`00-authorization.md`、`10-preferences.md`、`15-questions.md`、`20-web.md`）；提问通过普通聊天进行，一次一问并等待回答，不使用弹窗
-- `rules/machines/` — 按机器条件生效（`windows.md`）
+- `rules/shared/` — 所有机器通用的授权、偏好、提问约束与 Web 检索路由；提问通过普通聊天进行，一次一问并等待回答，不使用弹窗
+- `rules/machines/` — 按机器条件生效的环境约束（`windows.md`）
 
 ## 开发
 

@@ -12,9 +12,8 @@ import type { Diagnostic, Fragment, FragmentSource, MatchConditions } from "./ty
 
 const FRAGMENT_EXTENSION = ".md";
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
-const GROUP_PATTERN = /^[A-Za-z0-9_-]+$/;
 const FILE_PREFIX = /(^|\/)\d+[-_]/g;
-const META_KEYS = new Set(["id", "title", "target", "group", "enabled", "when"]);
+const META_KEYS = new Set(["id", "title", "enabled", "when"]);
 
 export function scanFragments(sources: FragmentSource[]): { fragments: Fragment[]; diagnostics: Diagnostic[] } {
 	const diagnostics: Diagnostic[] = [];
@@ -83,15 +82,6 @@ function normalizeFragment(
 	if (!ID_PATTERN.test(id)) return fail(`invalid id "${id}"; use letters, digits, ".", "_", "-" and "/"`);
 	if (!document.body) return fail("fragment body is empty");
 
-	let target: Fragment["meta"]["target"] = "section";
-	if (data.target !== undefined) {
-		if (data.target !== "section" && data.target !== "rule") return fail('`target` must be "section" or "rule"');
-		target = data.target;
-	}
-
-	const group = typeof data.group === "string" ? data.group.trim() : "shared";
-	if (!GROUP_PATTERN.test(group)) return fail(`invalid group "${group}"; use letters, digits, "_" or "-"`);
-
 	let enabled = true;
 	if (data.enabled !== undefined) {
 		if (typeof data.enabled !== "boolean") return fail("`enabled` must be true or false");
@@ -107,7 +97,7 @@ function normalizeFragment(
 
 	const title = typeof data.title === "string" && data.title.trim() !== "" ? data.title.trim() : undefined;
 	return {
-		meta: { id, title, target, group, enabled, conditions },
+		meta: { id, title, enabled, conditions },
 		body: document.body,
 		path: file,
 		source,

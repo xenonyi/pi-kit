@@ -1,8 +1,6 @@
 ---
 id: shared/authorization
 title: 授权
-target: rule
-group: shared
 ---
 
 - 编写、修改或运行测试以及安装依赖，都必须先获得用户单独授权；静态检查与类型检查除外

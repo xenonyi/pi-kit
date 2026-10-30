@@ -3,9 +3,8 @@
  *
  * Fragments live in this repository's `rules/` directory (synced through git) or
  * in the machine-local `<agent-dir>/rules` overlay. Each fragment decides where
- * it applies with `when:` conditions and is injected as guideline bullets or as
- * a named, independently replaceable section, so an edit only appends a delta to
- * the transcript instead of invalidating the whole prompt.
+ * it applies with `when:` conditions and is injected as guideline bullets.
+ * Detailed workflows live in skills; fragments can direct the model to read them.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -145,7 +144,7 @@ function completions(prefix: string, runtime: RulesRuntime): AutocompleteItem[] 
 		.map((fragment) => ({
 			value: fragment.meta.id,
 			label: fragment.meta.id,
-			description: fragment.meta.title ?? fragment.meta.target,
+			description: fragment.meta.title,
 		}));
 	return items.length > 0 ? items : null;
 }

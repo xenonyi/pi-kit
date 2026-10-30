@@ -6,8 +6,6 @@
  * where a fragment sits in the prompt.
  */
 
-export type FragmentTarget = "rule" | "section";
-
 /** Conditions that decide whether a fragment applies. Arrays hold alternatives. */
 export interface MatchConditions {
 	os?: string[];
@@ -19,9 +17,6 @@ export interface MatchConditions {
 export interface FragmentMeta {
 	id: string;
 	title?: string;
-	target: FragmentTarget;
-	/** Section group; the injected tag is `pi_rules_<group>`. */
-	group: string;
 	enabled: boolean;
 	conditions?: MatchConditions;
 }
@@ -75,13 +70,7 @@ export interface DroppedFragment {
 	reason: string;
 }
 
-export interface PlannedSection {
-	tag: string;
-	content: string;
-}
-
 export interface Plan {
-	sections: PlannedSection[];
 	guidelines: string[];
 	active: ActiveFragment[];
 	dropped: DroppedFragment[];

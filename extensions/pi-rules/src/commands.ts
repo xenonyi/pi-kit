@@ -62,7 +62,7 @@ function showList(ctx: ExtensionCommandContext, runtime: RulesRuntime, env: Mach
 		const dropped = plan.dropped.find((item) => item.id === fragment.meta.id);
 		const marker = active ? "✓" : "✗";
 		const detail = active ? `${active.chars} chars` : (dropped?.reason ?? "not matched");
-		lines.push(`- ${marker} ${fragment.meta.id} · ${fragment.meta.target} · ${fragment.source.kind} · ${detail}`);
+		lines.push(`- ${marker} ${fragment.meta.id} · ${fragment.source.kind} · ${detail}`);
 	}
 	if (runtime.fragments.length === 0) lines.push("- no fragments found; add Markdown files under rules/");
 
@@ -109,7 +109,7 @@ function showDoctor(ctx: ExtensionCommandContext, runtime: RulesRuntime, env: Ma
 	lines.push(
 		"",
 		"## Size",
-		`- ${plan.chars} chars · ${plural(plan.guidelines.length, "guideline")} · ${plural(plan.sections.length, "section")}`,
+		`- ${plan.chars} chars · ${plural(plan.guidelines.length, "guideline")}`,
 		"",
 		"## Profile",
 		`- os: \`${env.os}\` · host: \`${env.host}\``,
@@ -120,26 +120,15 @@ function showDoctor(ctx: ExtensionCommandContext, runtime: RulesRuntime, env: Ma
 		"## Injected in this session",
 	);
 
-	if (plan.sections.length === 0 && plan.guidelines.length === 0) lines.push("- nothing planned");
-	let injected = 0;
-	for (const section of plan.sections) {
-		const value = recorded[section.tag];
-		if (typeof value !== "string") {
-			lines.push(`- \`<${section.tag}>\`: not injected yet`);
-			continue;
-		}
-		injected += 1;
-		const current = value.includes(section.content);
-		lines.push(`- \`<${section.tag}>\`: ${current ? "injected, matches the plan" : "injected, older than the plan"}`);
-	}
-	if (plan.guidelines.length > 0) {
+	if (plan.guidelines.length === 0) {
+		lines.push("- nothing planned");
+	} else {
 		const rules = recorded.rules;
 		const found = typeof rules === "string" ? plan.guidelines.filter((line) => rules.includes(line)).length : 0;
-		if (found > 0) injected += 1;
 		lines.push(`- guidelines in \`<rules>\`: ${found} / ${plan.guidelines.length}`);
-	}
-	if (plan.chars > 0 && injected === 0) {
-		lines.push("", "Nothing injected yet: fragments are applied when a run starts, so send a prompt and check again.");
+		if (found === 0) {
+			lines.push("", "Nothing injected yet: fragments are applied when a run starts, so send a prompt and check again.");
+		}
 	}
 
 	if (plan.dropped.length > 0) {
@@ -184,14 +173,10 @@ function showPrompt(ctx: ExtensionCommandContext): void {
 	}
 
 	const tags = Object.keys(replay.sections);
-	const injected = tags.filter((tag) => tag.startsWith("pi_rules_"));
 	const fence = text.includes("````") ? "`````" : text.includes("```") ? "````" : "```";
 	const lines = [
 		"- source: transcript, what the model received",
 		`- size: ${text.length} chars ≈ ${Math.round(text.length / 4)} tokens · ${plural(tags.length, "section")} · ${plural(replay.content.length, "content block")}`,
-		injected.length > 0
-			? `- pi-rules sections: ${injected.map((tag) => `\`<${tag}>\``).join(", ")}`
-			: "- pi-rules sections: none recorded",
 		"",
 		`${fence}text`,
 		text,
