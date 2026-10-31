@@ -15,8 +15,6 @@ pnpm tsc         # 类型检查
 
 | 扩展 | 说明 | 文档 |
 | --- | --- | --- |
-| `pi-btw` | `/btw` 命令：不污染会话历史的旁支提问，答案只在临时面板，仅在 TUI 会话注册 | [README](./extensions/pi-btw/README.md) |
-| `pi-hashline-edit` | `hash_read` / `hash_edit`：行锚点 + sha256 revision 校验的读取与原子行编辑 | [README](./extensions/pi-hashline-edit/README.md) |
 | `pi-lsp` | 按文件扩展名路由语言服务器，提供 `lsp_diagnostics` 与 `lsp_fix` | [README](./extensions/pi-lsp/README.md) |
 | `pi-mcp` | 从 `servers.json` 注册 MCP 服务器，缺环境变量的条目自动跳过 | [README](./extensions/pi-mcp/README.md) |
 | `pi-rules` | 按环境条件注入 `rules/` 下的短规则，详细流程由 skill 按需加载 | [README](./extensions/pi-rules/README.md) |
