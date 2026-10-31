@@ -15,6 +15,8 @@ pnpm tsc         # 类型检查
 
 | 扩展 | 说明 | 文档 |
 | --- | --- | --- |
+| `pi-ask-user-question` | `ask_user_question` 工具：向用户提一个阻塞问题（自由文本 / 单选 / 多选），仅在 TUI 会话声明 | [README](./extensions/pi-ask-user-question/README.md) |
+| `pi-btw` | `/btw` 命令：不污染会话历史的旁支提问，答案只在临时面板，仅在 TUI 会话注册 | [README](./extensions/pi-btw/README.md) |
 | `pi-lsp` | 按文件扩展名路由语言服务器，提供 `lsp_diagnostics` 与 `lsp_fix` | [README](./extensions/pi-lsp/README.md) |
 | `pi-mcp` | 从 `servers.json` 注册 MCP 服务器，缺环境变量的条目自动跳过 | [README](./extensions/pi-mcp/README.md) |
 | `pi-rules` | 按环境条件注入 `rules/` 下的短规则，详细流程由 skill 按需加载 | [README](./extensions/pi-rules/README.md) |
@@ -30,7 +32,7 @@ pnpm tsc         # 类型检查
 
 `rules/` 存 Markdown 短规则，由 `pi-rules` 按 `os` / `host` / `cwd` / `tools` 条件注入系统提示词的 `<rules>` 段；详细流程放进 `skills/`，必要时由规则要求先读取对应 skill：
 
-- `rules/shared/` — 所有机器通用的授权、偏好、提问约束与 Web 检索路由；提问通过普通聊天进行，一次一问并等待回答，不使用弹窗
+- `rules/shared/` — 所有机器通用的授权、偏好、提问约束与 Web 检索路由；提问优先使用已提供的 `ask_user_question`，否则通过普通聊天进行，一次一问并等待回答
 - `rules/machines/` — 按机器条件生效的环境约束（`windows.md`）
 
 ## 开发
