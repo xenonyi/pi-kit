@@ -10,7 +10,7 @@
 - `herdr api schema --json`：283 KB，约 117 个 `$defs`（`AgentPromptParams`、`AgentStartParams` …），带 `protocol: 22`、`schema_version: 1`。契约可机器读取，但不可能塞进上下文。
 - `herdr --skill` 正文是 bash，其自身声明「二进制才是权威」。
 - pi extension 能力：`registerTool`（含 `exposure` / `namespace` / `annotations` / `executionMode`）、`registerCommand`、`before_agent_start`、`session_start`、`resources_discover`。
-- 仓库现状：7 个扩展，工具一律具名直连（`hash_read` / `lsp_diagnostics` / `ask_user_question`），无 namespace 分组；`pi-mcp` 用 `exposure: "codemode"`。
+- 仓库现状（当时）：7 个扩展，工具一律具名直连（`lsp_diagnostics` / `lsp_fix` / `ask_user_question`），无 namespace 分组；`pi-mcp` 用 `exposure: "codemode"`。
 - 仓库零测试，仅 `pnpm tsc`；skills 目录只有 `grill`，两个 herdr skill 在仓库外 `C:\Users\x1any\.agents\skills\`。
 
 ## 已定的结论
