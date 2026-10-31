@@ -1,6 +1,6 @@
 ---
 name: herdr-app-handoff
-description: 把当前任务连同上下文移交给 herdr-core 中的新终端 agent（或已存在的 idle agent），交出后不等待、不轮询。保证用户随时可接管；新终端的启动方式见 `skills/herdr-app`。仅在用户明确说 handoff / 交接 / 移交给 X / 换人接手时使用；咨询与 handoff 的分界在所有权，不在并行。需要 herdr-core 的 `hc`；工具列表中存在 `herdr_*` 时改用 `skills/herdr-handoff`。
+description: 把当前任务连同上下文移交给 herdr-core 中的新终端 agent（或已存在的 idle agent），交出后不等待、不轮询。保证用户随时可接管；新终端的启动方式见 `skills/herdr-app`。仅在用户明确说 handoff / 交接 / 移交给 X / 换人接手时使用；咨询与 handoff 的分界在所有权，不在并行。需要 herdr-core 的 `hc`。
 ---
 
 # Herdr App Handoff

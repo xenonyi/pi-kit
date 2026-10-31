@@ -1,6 +1,6 @@
 ---
 name: herdr-app
-description: herdr-app 窗口与 herdr-core（`hc`）的操作入口：用 `hc` 启动、读取、等待、清理终端与 agent，用 `herdr-app do` 调整 space / tab / pane 与焦点。用户提到 herdr-app、hc、herdr-core，或当前会话位于 herdr-app 窗口内时使用。工具列表中存在 `herdr_*`（旧多路复用器）时改用 `skills/herdr`，两套不可混用。
+description: herdr-app 窗口与 herdr-core（`hc`）的操作入口：用 `hc` 启动、读取、等待、清理终端与 agent，用 `herdr-app do` 调整 space / tab / pane 与焦点。用户提到 herdr-app、hc、herdr-core，或当前会话位于 herdr-app 窗口内时使用。
 ---
 
 # Herdr App + Core
@@ -9,7 +9,7 @@ description: herdr-app 窗口与 herdr-core（`hc`）的操作入口：用 `hc` 
 
 - `HC_TERMINAL_ID` 非空表示当前会话运行在 herdr-core 终端内（`t13` 形式的**终端地址**，不是 pane id）。
 - `herdr-app status` 返回 JSON 表示窗口在运行；其中 `errors` 非空是窗口自身加载项异常，应上报用户，与命令本身无关。窗口不在时后台委托照常执行，但不要自行开窗。
-- 旧版 `herdr`（`herdr_*` 工具、`HERDR_PANE_ID`）是另一套体系：存在 `herdr_*` 时转 `skills/herdr`。
+- 旧版 herdr 多路复用器整套（`herdr` / `herdr-handoff` skill 与 `pi-herdr` 扩展）已归档至 tag `archive/pi-herdr`：一律走本 skill 的 `hc` 路线，`herdr_*` 工具与 `HERDR_PANE_ID` 不再使用。
 
 ## 分工
 
