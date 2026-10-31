@@ -9,7 +9,6 @@ description: herdr-app 窗口与 herdr-core（`hc`）的操作入口：用 `hc` 
 
 - `HC_TERMINAL_ID` 非空表示当前会话运行在 herdr-core 终端内（`t13` 形式的**终端地址**，不是 pane id）。
 - `herdr-app status` 返回 JSON 表示窗口在运行；其中 `errors` 非空是窗口自身加载项异常，应上报用户，与命令本身无关。窗口不在时后台委托照常执行，但不要自行开窗。
-- 旧版 herdr 多路复用器整套（`herdr` / `herdr-handoff` skill 与 `pi-herdr` 扩展）已归档至 tag `archive/pi-herdr`：一律走本 skill 的 `hc` 路线，`herdr_*` 工具与 `HERDR_PANE_ID` 不再使用。
 
 ## 分工
 
