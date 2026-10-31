@@ -1,6 +1,6 @@
 ---
 name: herdr
-description: Herdr 操作入口：控制 pane、tab、workspace 与 pane 内的 agent。优先用 pi-herdr 扩展的 herdr_* 工具；工具未覆盖的走 herdr_cli 透传，flag 记不清就读 `herdr --skill` 契约。仅在 Herdr pane 内可用（工具缺失即不在 pane 内）。
+description: Herdr 操作入口：控制 pane、tab、workspace 与 pane 内的 agent。优先用 pi-herdr 扩展的 herdr_* 工具；工具未覆盖的走 herdr_cli 透传，flag 记不清就读 `herdr --skill` 契约。仅在 Herdr pane 内可用；工具列表里没有 `herdr_*` → 改用 `skills/herdr-app`（herdr-core / hc）。
 ---
 
 # Herdr

@@ -1,6 +1,6 @@
 ---
 name: herdr-handoff
-description: 把当前任务连同上下文移交给一个新的 Herdr agent pane（或已有 idle agent），交完不等、不轮询。仅在用户明确说 handoff / 交接 / 移交给 X / 换个人接着做 时使用；判断只读咨询与 handoff 的区别是所有权，不是并行。需要 pi-herdr 扩展（herdr_* 工具）。
+description: 把当前任务连同上下文移交给一个新的 Herdr agent pane（或已有 idle agent），交完不等、不轮询。仅在用户明确说 handoff / 交接 / 移交给 X / 换个人接着做 时使用；判断只读咨询与 handoff 的区别是所有权，不是并行。需要 pi-herdr 扩展（`herdr_*` 工具）；工具列表里没有 `herdr_*` → 改用 `skills/herdr-app-handoff`。
 ---
 
 # Herdr Handoff
@@ -20,11 +20,11 @@ Herdr 的 handoff = 选一个位置 + 给它一个身份 + 一次投递。用户
 | 用户说的 | 用 | 产出 |
 | --- | --- | --- |
 | 「交给右边那个」/ 已经有 agent 在跑 | `herdr_cli ["pane","neighbor", …]` 定位，再 `herdr_agent_prompt` | 不新建任何东西 |
-| 「开个新 agent 做」 | `herdr_agent_spawn` | 同 tab、同 cwd 的兄弟 pane |
+| 「开个新 agent 做」 | `herdr_agent_spawn` | 同 tab、同 cwd 的同级 pane |
 | 「在工作树里做」/「别碰我的分支」 | `herdr_cli ["worktree","create", …]` | 新 workspace + tab + root pane + worktree |
 | 「在新目录/新项目做」 | `herdr_cli ["workspace","create", …]` | 新 workspace |
 
-默认是**同 tab、同 cwd 的兄弟 pane**；不主动造 workspace / tab / worktree，也不换 cwd。
+默认是**同 tab、同 cwd 的同级 pane**；不主动造 workspace / tab / worktree，也不换 cwd。
 
 ### 交给已有的 agent（最省）
 
@@ -38,7 +38,7 @@ herdr_agent_get { target: <pane_id> }        # 确认占用者与状态
 
 改名只在用户要求或确实需要稳定别名时做：`herdr_cli ["agent","rename", <pane>, "handoff-1"]`。已占用就递增到 `handoff-2`，不要试图覆盖。
 
-### 新开兄弟 pane（默认）
+### 新开同级 pane（默认）
 
 ```text
 herdr_agent_spawn { name: "handoff-1", kind: "pi" }
@@ -160,7 +160,7 @@ herdr_cli ["notification","show","Handoff ready","--body","<name> · <路径或�
 
 ## 硬规则
 
-- 默认同 tab、同 cwd 的兄弟 pane；不主动升级拓扑。
+- 默认同 tab、同 cwd 的同级 pane；不主动升级拓扑。
 - `--no-focus` 用于后台工作，除非用户明确要切过去。
 - 目标一律用 `--current`、显式 pane ID 或唯一 agent 名；**不要依赖另一个 client 的焦点 pane**。
 - ID 从 `structuredContent` / `.result.*` 解析，不从正文、sidebar 顺序或示例里推。
