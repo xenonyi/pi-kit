@@ -1,2 +1,3 @@
-- 用 pnpm（根目录唯一 `package.json`；`pnpm-lock.yaml` 只由 pnpm 生成/更新，不手改）
-- `extensions/<name>/`：`index.ts` 入口 + `src/*.ts`
+- 用 pnpm 管理依赖和脚本。依赖、脚本和唯一的 `package.json` 都在根目录，`pnpm-lock.yaml` 只由 pnpm 生成和更新，不要手改。
+- `pnpm tsc` 做类型检查。`package.json` 的 `pi` 字段声明入口：`extensions/*/index.ts` 和 `skills/`。
+- 根 `README.md` 是入口，详细文档就地放在它描述的对象旁边。
