@@ -16,7 +16,7 @@
     "context7": {
       "url": "https://mcp.context7.com/mcp",
       "exposure": "codemode",
-      "description": "库与框架的现行文档",
+      "description": "库文档检索：API 用法、配置和排错",
       "headers": { "Authorization": "Bearer ${CONTEXT7_API_KEY}" }
     }
   }
