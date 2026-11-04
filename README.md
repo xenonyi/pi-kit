@@ -33,5 +33,20 @@ pnpm tsc         # 类型检查
 
 `rules/` 存放 Markdown 短规则。`pi-rules` 按 `os`、`host`、`cwd`、`tools` 条件，把命中的规则注入系统提示词的 `<rules>` 段。详细流程放在 `skills/` 里，规则只保留常驻约束。
 
-- `rules/shared/`：所有机器通用的授权、偏好和文档维护约定。
+- `rules/shared/`：所有机器通用的授权、偏好、判断、交付与文档维护约定。
 - `rules/machines/`：按机器条件生效的环境约束（`windows.md`）。
+
+### 跨模型规则
+
+以下片段合并了 GPT with Taste 中主代理、子代理和事件提醒的共同行为，去掉固定人设与宿主工具细节。正文不依赖具体模型或工具名称，默认由 `pi-rules` 加载。
+
+| 片段 | 约束 |
+| --- | --- |
+| [目标与判断](./rules/shared/03-judgment.md) | 明确目标和完成条件，给出推荐，处理阻塞并恢复任务上下文 |
+| [实施与验收](./rules/shared/04-delivery.md) | 复用现有能力，保留兼容契约，按证据修复并验收实际产物 |
+| [协作与交接](./rules/shared/05-collaboration.md) | 明确负责人和授权边界，整合结果，只传递影响行动的信息 |
+| [表达与证据](./rules/shared/06-communication.md) | 先给结论，按证据强度表述，删去空话并说明真实缺口 |
+
+这些质量要求不扩大操作权限。[默认偏好](./rules/shared/01-preferences.md) 中的授权、测试和依赖安装限制仍然适用。
+
+来源：[GPT with Taste 的 `prompts/`](https://github.com/NB-Corp/gpt-with-taste/tree/079fb262b4d7932515ba4e6341fd57b6f2122f4a/prompts)（提交 `079fb26`，2026-10-17）。上游使用 MIT License，许可原文见 [LICENSE.gpt-with-taste](./rules/LICENSE.gpt-with-taste)。
