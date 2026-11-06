@@ -33,6 +33,10 @@
 
 返回 `address`、`name`、`placement`、`cwd`、`pane`、`spaceName`、`tabName`、`parent`、`outliveParent`、`state`、`status`、`turn`、`taskFile`、`steps` 和 `warnings`。
 
+Linux/macOS 上，新程序沿用调用方 pi 进程的 `PATH`，三种 `placement` 都适用，系统需提供 `/usr/bin/env`。这让子会话能找到父会话可用的 `hc` 和 mise 等工具。仅传递 `PATH`，不复制父会话的其他环境变量或 `HC_TERMINAL_ID`。Windows 保持 hc 原有的环境处理方式。
+
+如果子会话报 `hc was not found on PATH`，先确认父 pi 进程的 `PATH` 包含 `hc` 所在目录。更新扩展并在父会话执行 `/reload` 后，再新建子会话。已经运行的子会话不会自动获得新环境，单独在 shell 工具里执行 `export PATH=…` 也不能改变 pi 进程的环境。现有任务可先使用已确认的 CLI 绝对路径；无需为此重启 core 或关闭终端。
+
 ### `herdr_send`
 
 | 参数 | 说明 |

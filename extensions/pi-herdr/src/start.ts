@@ -1,9 +1,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import { CliError, runCliJson } from "./cli.ts";
 import { formatError } from "./format.ts";
-import { listTerminals, findTerminal, locateTerminalWhenShown, myAddress, readWindow } from "./terminals.ts";
+import { findTerminal, listTerminals, locateTerminalWhenShown, myAddress, readWindow } from "./terminals.ts";
 import type { Direction, Placement, StartResult, TerminalInfo } from "./types.ts";
 import { runDo } from "./ui.ts";
 
@@ -54,6 +55,11 @@ export async function startTerminal(
 
 	const steps: string[] = [];
 	const warnings: string[] = [];
+	const argv = [...params.argv];
+	if (process.platform !== "win32" && process.env.PATH !== undefined) {
+		argv.unshift("/usr/bin/env", `PATH=${process.env.PATH}`);
+		steps.push("forward the calling session's PATH to the new program");
+	}
 	const listed = await listTerminals({ signal: options.signal });
 	const name = uniqueName(params.name, listed.terminals);
 	const cwd = path.resolve(options.cwd, params.cwd ?? ".");
@@ -73,7 +79,7 @@ export async function startTerminal(
 	if (placement === "tab") {
 		const created = await runDo(
 			"tab.new",
-			{ name, folder: cwd, argv: params.argv, task: task.passed },
+			{ name, folder: cwd, argv, task: task.passed },
 			{ signal: options.signal },
 		);
 		address = typeof created.terminal === "string" ? created.terminal : "";
@@ -90,7 +96,7 @@ export async function startTerminal(
 				name,
 				"--cwd",
 				cwd,
-				...params.argv,
+				...argv,
 				...(task.passed ? [task.passed] : []),
 			],
 			{ timeoutMs: RUN_TIMEOUT_MS, signal: options.signal },
