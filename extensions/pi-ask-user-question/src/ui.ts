@@ -576,6 +576,7 @@ export async function askSingleChoice(
                 handleInput,
             };
         },
+        { blocked: { kind: "question", message: question } },
     );
 }
 
@@ -813,5 +814,6 @@ export async function askMultiChoice(
                 handleInput,
             };
         },
+        { blocked: { kind: "question", message: question } },
     );
 }
