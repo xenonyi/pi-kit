@@ -1,0 +1,6 @@
+interface:
+  display_name: "Humanize Tech Docs"
+  short_description: "Docs a zero-context fresh reader can use"
+
+policy:
+  allow_implicit_invocation: false
