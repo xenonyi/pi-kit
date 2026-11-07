@@ -1,6 +1,7 @@
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import type { ServerCommand } from "./types.ts";
 
 export function commandExists(command: string, cwd = process.cwd(), pathValue = process.env.PATH ?? "") {
 	return resolveCommandPath(command, cwd, process.platform, pathValue) !== undefined;
@@ -48,9 +49,8 @@ export function resolveCommandPath(
 	platform: NodeJS.Platform = process.platform,
 	pathValue = process.env.PATH ?? "",
 ) {
-	// Windows resolves PATHEXT candidates first: the bare name is often a POSIX
-	// shim (for example from pnpm) that spawn cannot execute directly.
-	const extensions = platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
+	const extensions =
+		platform === "win32" && !/\.(?:com|exe|cmd|bat)$/i.test(command) ? [".exe", ".cmd", ".bat", ""] : [""];
 	if (command.includes("/") || command.includes("\\")) {
 		const commandPath = path.isAbsolute(command) ? command : path.resolve(cwd, command);
 		return resolveRunnableFile(commandPath, extensions, platform);
@@ -62,6 +62,35 @@ export function resolveCommandPath(
 	}
 
 	return undefined;
+}
+
+export function resolveSpawnCommand(
+	command: ServerCommand,
+	platform: NodeJS.Platform = process.platform,
+	comSpec = process.env.ComSpec,
+): ServerCommand & { windowsVerbatimArguments?: boolean } {
+	if (platform !== "win32" || !/\.(?:bat|cmd)$/i.test(command.command)) return command;
+	const commandLine = [escapeCmd(command.command), ...command.args.map(quoteBatchArgument)].join(" ");
+	return {
+		command: comSpec?.trim() || "cmd.exe",
+		args: ["/d", "/s", "/v:off", "/c", `"${commandLine}"`],
+		windowsVerbatimArguments: true,
+	};
+}
+
+function escapeCmd(value: string) {
+	return value.replace(/[()[\]%!^"`<>&|;, *?\t]/g, "^$&");
+}
+
+function quoteBatchArgument(value: string) {
+	const quoted = value.replace(/(\\+)|"/g, (_match, backslashes: string | undefined, index: number) => {
+		if (!backslashes) return '\\"';
+		const next = value[index + backslashes.length];
+		return next === undefined || next === '"' ? backslashes.repeat(2) : backslashes;
+	});
+	const argument = escapeCmd(`"${quoted}"`);
+	// Literal quotes need another escape layer when a batch file forwards argv.
+	return value.includes('"') ? escapeCmd(argument) : argument;
 }
 
 function resolveRunnableFile(filePath: string, extensions: string[], platform: NodeJS.Platform) {

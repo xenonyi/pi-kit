@@ -87,7 +87,8 @@ pi-lsp 不下载任何语言服务器，只启动已安装并在 `PATH` 上的�
 
 服务器条目支持以下字段：
 
-- `command`：启动服务器的 argv 数组。第一个元素是命令，其余是参数，不经 shell 解析。
+- `command`：启动服务器的 argv 数组。第一个元素是命令，其余元素是独立参数，不要自行添加 shell 引号。Windows 的 `.cmd/.bat` 由 `cmd.exe` 启动，其他命令直接启动。
+  自定义 Windows 启动脚本需用 `%*` 或 `%1` 原样转发含引号的复杂参数。若用 `"%~1"` 等方式重组参数，转义由脚本负责。
 - `extensions`：路由到该服务器的文件扩展名，带不带前导点都接受。
 - `env`：子进程环境变量覆盖。子进程先继承 Pi 的环境，再叠加这些值；`env.PATH` 同时用于解析 `command[0]`。
 - `initialization`：LSP 的 `initializationOptions`，同时作为 `workspace/configuration` 中对应 section 的返回值。

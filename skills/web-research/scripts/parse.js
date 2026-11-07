@@ -1,7 +1,7 @@
 // web-research 返回值解析器。整个文件必须是一个表达式，供 codemode 里 eval 使用：
 //   const P = eval(await tools.read({ path: "<本文件绝对路径>", offset: null, limit: null }));
 ({
-  // CallToolResult -> 正文；isError 或无正文时抛错，交给 safe() 兜底
+  // CallToolResult -> 正文；isError 或无正文时抛错
   body(r) {
     const parts = ((r && r.content) || []).map((c) => c.text || "").filter(Boolean);
     const text = parts.join("\n");

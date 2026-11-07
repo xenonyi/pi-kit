@@ -46,6 +46,17 @@ LSP 扩展。按文件扩展名把请求路由到可配置的语言服务器，�
 
 - 服务器命令以 Pi 的权限运行，继承 Pi 环境，再叠加 `servers[].env`。项目配置只在项目被信任时使用。请审查每条配置的命令、参数、环境变量和初始化选项。
 
+## 验证
+
+在仓库根目录运行：
+
+```sh
+pnpm tsc
+pnpm exec node --test extensions/pi-lsp/src/command.test.ts
+```
+
+回归测试覆盖命令解析，以及 Windows 批处理的参数转发和条件判断。检测到已安装的 Ruff 时，还会验证原生程序接收的参数。Windows 启动用例在其他平台跳过；测试文件只写入系统临时目录。
+
 ## 来源
 
 合并自 [narumiruna/pi-extensions 的 packages/pi-lsp](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-lsp)（上游 `1d1f8fe`，MIT）。本仓库改为直接加载 TypeScript 源码，不需要构建，并按本机语言栈裁剪了内置服务器目录。许可证见 [LICENSE](./LICENSE)。

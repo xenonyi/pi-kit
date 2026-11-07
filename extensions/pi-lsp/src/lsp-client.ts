@@ -2,22 +2,12 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { commandPathValue, mergeEnvironment, resolveCommandPath } from "./command.ts";
+import { commandPathValue, mergeEnvironment, resolveCommandPath, resolveSpawnCommand } from "./command.ts";
 import { directoryUri } from "./files.ts";
 import { positionAt } from "./text-edits.ts";
 import type { CodeAction, JsonRpcMessage, LspDiagnostic, LspServerAdapter, ServerCommand } from "./types.ts";
 
-export function resolveSpawnCommand(
-	command: ServerCommand,
-	platform: NodeJS.Platform = process.platform,
-	comSpec = process.env.ComSpec,
-): ServerCommand {
-	if (platform !== "win32" || !/\.(?:bat|cmd)$/i.test(command.command)) return command;
-	return {
-		command: comSpec?.trim() || "cmd.exe",
-		args: ["/d", "/s", "/c", command.command, ...command.args],
-	};
-}
+export { resolveSpawnCommand } from "./command.ts";
 
 // Quiet period (ms) after each publish before treating push diagnostics as settled.
 const PUBLISHED_DIAGNOSTICS_SETTLE_MS = 800;
@@ -92,6 +82,7 @@ export class LspClient {
 			cwd: this.#cwd,
 			env: mergeEnvironment(this.#adapter.env),
 			stdio: "pipe",
+			windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
 		});
 		this.#child = child;
 		this.#process = child;
@@ -154,6 +145,21 @@ export class LspClient {
 					// capabilities must be advertised statically.
 					codeAction: {
 						dynamicRegistration: false,
+						codeActionLiteralSupport: {
+							codeActionKind: {
+								valueSet: [
+									"",
+									"quickfix",
+									"refactor",
+									"refactor.extract",
+									"refactor.inline",
+									"refactor.rewrite",
+									"source",
+									"source.organizeImports",
+									"source.fixAll",
+								],
+							},
+						},
 						resolveSupport: { properties: ["edit"] },
 					},
 					diagnostic: { dynamicRegistration: false, relatedDocumentSupport: true },
