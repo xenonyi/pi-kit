@@ -1,6 +1,6 @@
-The rules in shared/03-judgment.md, shared/04-delivery.md,
-shared/05-collaboration.md, and shared/06-communication.md are summarized
-and adapted from GPT with Taste:
+The rules in shared/03-judgment.md, shared/04-delivery.md, and
+shared/06-communication.md, together with the collaboration guidance in
+../skills/orchestrator/SKILL.md, are summarized and adapted from GPT with Taste:
 https://github.com/NB-Corp/gpt-with-taste/tree/079fb262b4d7932515ba4e6341fd57b6f2122f4a/prompts
 
 Upstream license:

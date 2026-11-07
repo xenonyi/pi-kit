@@ -27,6 +27,7 @@ pnpm tsc         # 类型检查
 | 技能 | 用途 |
 | --- | --- |
 | [handoff](./skills/handoff/SKILL.md) | 把当前会话整理成交接文档，保存到系统临时目录 |
+| [orchestrator](./skills/orchestrator/SKILL.md) | 手动调用，由主会话指挥单个执行者完成开发任务；执行者模型与职责由角色文件定义 |
 | [code-review](./skills/code-review/SKILL.md) | 从需求、规范与设计、安全与可靠性三个方向审查提交或工作区变更 |
 | [codebase-design](./skills/codebase-design/SKILL.md) | 设计深模块，评估接口、接缝和可测试性 |
 | [domain-modeling](./skills/domain-modeling/SKILL.md) | 明确领域术语，维护词汇表，并按需记录架构决策 |
