@@ -1,12 +1,10 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
-    Container,
     Editor,
     type EditorTheme,
     Key,
     matchesKey,
-    Spacer,
     Text,
     truncateToWidth,
     visibleWidth,
@@ -40,7 +38,7 @@ function createEditorTheme(theme: Theme): EditorTheme {
 }
 
 // Shared layout grid: every rendered row starts at one of these columns so the
-// question, choices, descriptions, editor, and hints line up on the same guides.
+// choices, descriptions, editor, and hints line up on the same guides.
 const CONTENT_INDENT = 1;
 const EDITOR_INDENT = 2;
 
@@ -79,8 +77,6 @@ interface ChoiceRow {
 }
 
 interface FrameConfig {
-    question: string;
-    context?: string;
     choices: ChoiceRow[];
     focusedIndex: number;
     editor?: { label?: string; component: Editor };
@@ -182,17 +178,12 @@ interface BodyLayout {
 }
 
 /**
- * Flattens the question and scrollable choice rows, remembering which lines
+ * Flattens the scrollable choice rows, remembering which lines
  * belong to each choice so the viewport can keep the focused row visible.
  */
-function layoutBody(
-    headerLines: string[],
-    blocks: ChoiceBlock[],
-    includeBlank: boolean,
-): BodyLayout {
-    const lines = [...headerLines];
+function layoutBody(blocks: ChoiceBlock[]): BodyLayout {
+    const lines: string[] = [];
     const focusedSpans = new Map<number, { start: number; end: number }>();
-    if (includeBlank) lines.push("");
     for (const block of blocks) {
         const start = lines.length;
         lines.push(...block.lines);
@@ -246,21 +237,6 @@ function renderFrame(
 ): string[] {
     const renderWidth = Math.max(1, width);
     const borderColor = (s: string) => theme.fg("border", s);
-
-    const header = new Container();
-    header.addChild(
-        new Text(
-            theme.bold(theme.fg("accent", config.question)),
-            CONTENT_INDENT,
-            0,
-        ),
-    );
-    if (config.context) {
-        header.addChild(new Spacer(1));
-        header.addChild(
-            new Text(theme.fg("muted", config.context), CONTENT_INDENT, 0),
-        );
-    }
 
     const blocks: ChoiceBlock[] = config.choices.map((row, index) => ({
         row,
@@ -349,11 +325,7 @@ function renderFrame(
     }
     const bodyBudget = Math.max(0, maxHeight - fixedRows - bottomLines.length);
 
-    let body = layoutBody(header.render(renderWidth), scrollableBlocks, true);
-    if (body.lines.length > bodyBudget) {
-        // Compress the separator blank before scrolling the body.
-        body = layoutBody(header.render(renderWidth), scrollableBlocks, false);
-    }
+    const body = layoutBody(scrollableBlocks);
 
     let visibleBody = body.lines;
     let scrollInfo: string | undefined;
@@ -421,7 +393,6 @@ function renderFrame(
 export async function askSingleChoice(
     ctx: ExtensionContext,
     question: string,
-    context: string | undefined,
     options: AskOption[],
 ): Promise<AskAnswer | null> {
     const otherLabel = getOtherLabel(options);
@@ -514,8 +485,6 @@ export async function askSingleChoice(
                     renderWidth,
                     panelRowBudget(rows),
                     {
-                        question,
-                        context,
                         choices: [
                             ...options.map((option, index) => ({
                                 id: `option:${index}`,
@@ -583,7 +552,6 @@ export async function askSingleChoice(
 export async function askMultiChoice(
     ctx: ExtensionContext,
     question: string,
-    context: string | undefined,
     options: AskOption[],
 ): Promise<AskAnswer[] | null> {
     const otherLabel = getOtherLabel(options);
@@ -762,8 +730,6 @@ export async function askMultiChoice(
                     renderWidth,
                     panelRowBudget(rows),
                     {
-                        question,
-                        context,
                         choices,
                         focusedIndex: optionIndex,
                         editor: editMode

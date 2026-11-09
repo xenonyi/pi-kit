@@ -1,5 +1,14 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import {
+    type ExtensionAPI,
+    getMarkdownTheme,
+} from "@earendil-works/pi-coding-agent";
+import {
+    Container,
+    Markdown,
+    Spacer,
+    Text,
+    TruncatedText,
+} from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
     type AskUserQuestionMode,
@@ -9,11 +18,7 @@ import {
     normalizeOptions,
     unavailableResult,
 } from "./src/core.ts";
-import {
-    askMultiChoice,
-    askSingleChoice,
-    getOtherLabel,
-} from "./src/ui.ts";
+import { askMultiChoice, askSingleChoice } from "./src/ui.ts";
 
 const OptionSchema = Type.Object({
     label: Type.String({
@@ -129,10 +134,7 @@ function registerQuestionTool(
             }
 
             if (mode === "text") {
-                const editorTitle = context
-                    ? `${params.question}\n\n${context}`
-                    : params.question;
-                const answer = await ctx.ui.editor(editorTitle);
+                const answer = await ctx.ui.editor("Write your answer:");
                 if (answer === undefined) {
                     return cancelledResult(params.question, mode, context);
                 }
@@ -149,7 +151,6 @@ function registerQuestionTool(
                 const answer = await askSingleChoice(
                     ctx,
                     params.question,
-                    context,
                     options,
                 );
                 if (!answer) {
@@ -161,7 +162,6 @@ function registerQuestionTool(
             const answers = await askMultiChoice(
                 ctx,
                 params.question,
-                context,
                 options,
             );
             if (!answers) {
@@ -170,30 +170,31 @@ function registerQuestionTool(
             return buildResult(params.question, context, mode, answers);
         },
 
-        renderCall(args, theme) {
-            const options = normalizeOptions(
-                args.options as
-                    | Array<{
-                          label: string;
-                          value?: string;
-                          description?: string;
-                      }>
-                    | undefined,
-            );
-            let text =
-                theme.fg("toolTitle", theme.bold("ask_user_question ")) +
-                theme.fg("muted", args.question);
+        renderCall(args, theme, context) {
+            const question = typeof args.question === "string" ? args.question : "";
+            const details = typeof args.details === "string" ? args.details : "";
+            let title = theme.fg("toolTitle", theme.bold("ask_user_question"));
             if (args.multiSelect) {
-                text += theme.fg("dim", " [multi-select]");
+                title += theme.fg("dim", " [multi-select]");
             }
-            if (options.length > 0) {
-                const labels = [
-                    ...options.map((option) => option.label),
-                    getOtherLabel(options),
-                ].join(", ");
-                text += `\n${theme.fg("dim", `  Options: ${labels}`)}`;
+            if (!context.isPartial && !context.expanded) {
+                return new TruncatedText(
+                    `${title} ${theme.fg("muted", question.replace(/\s+/g, " "))}`,
+                    0,
+                    0,
+                );
             }
-            return new Text(text, 0, 0);
+
+            const container = new Container();
+            container.addChild(new Text(title, 0, 0));
+            if (question) {
+                container.addChild(new Text(theme.fg("accent", question), 0, 0));
+            }
+            if (details) {
+                container.addChild(new Spacer(1));
+                container.addChild(new Markdown(details, 0, 0, getMarkdownTheme()));
+            }
+            return container;
         },
 
         renderResult(result, _options, theme) {
