@@ -3,7 +3,7 @@ import { getCurrentSystemPrompt, type Context, type Message } from "@earendil-wo
 
 import { AntigravityAcpError } from "../acp/errors.js";
 
-const MAX_RECONSTRUCTION_CHARS = 32_000;
+const MAX_RECONSTRUCTION_CHARS = 128_000;
 const MAX_INSTRUCTION_BYTES = 256 * 1024;
 const ENTRY_SEPARATOR = "\n\n";
 const HISTORY_HEADING =
@@ -14,6 +14,9 @@ const CONTINUATION_LABEL =
 	"Continue the current Pi user request below. Incorporate the latest tool results from the Pi context without repeating completed tool actions.\n\n# Current Pi user request";
 const WARM_CONTINUATION =
 	"Continue the current Pi user request already given in this session. Incorporate the latest tool results without repeating completed tool actions.";
+const COMPACTION_SUMMARY_PREFIX =
+	"The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
+const TRUNCATION_MARKER = "[truncated older context]";
 const LINE_BREAKS = /[\r\n\v\f\u0085\u2028\u2029]+/gu;
 
 /** Instructions are never silently truncated or counted as consumed by a tool continuation. */
@@ -35,6 +38,8 @@ interface HistoryEntry {
 	body?: string;
 	/** Active tool-loop identities survive even when their bodies cannot. */
 	pinned?: boolean;
+	/** Leading compaction summary messages are kept ahead of older turns during truncation. */
+	summary?: boolean;
 	toolResult?: boolean;
 }
 
@@ -95,7 +100,7 @@ export function buildPromptParts(
 
 function contextResource(kind: string, text: string): ContentBlock {
 	return { type: "resource", resource: {
-		uri: `urn:pi:antigravity-acp:${kind}/${crypto.randomUUID()}`,
+		uri: `urn:pi:antigravity-acp:${kind}`,
 		mimeType: "text/markdown", text,
 	} };
 }
@@ -108,15 +113,39 @@ function boundedSection(heading: string, entries: HistoryEntry[]): string {
 	if (entries.length === 0) return "";
 	const full = [heading, ...entries.map((entry) => renderEntry(entry))].join(ENTRY_SEPARATOR);
 	if (full.length <= MAX_RECONSTRUCTION_CHARS) return full;
-	const prefix = `${heading}${ENTRY_SEPARATOR}[truncated older context]`;
 	const firstPinned = entries.findIndex((entry) => entry.pinned);
 	const pinnedStart = firstPinned < 0 ? entries.length : firstPinned;
+	let headCount = 0;
+	while (headCount < pinnedStart && entries[headCount]!.summary) headCount += 1;
+	const head = entries.slice(0, headCount);
+	const middle = entries.slice(headCount, pinnedStart);
 	const pinned = entries.slice(pinnedStart);
 	const rendered = pinned.map(minimalEntry);
-	let remaining = MAX_RECONSTRUCTION_CHARS - prefix.length -
+	const markerCost = headCount === 0 || middle.length > 0 ? ENTRY_SEPARATOR.length + TRUNCATION_MARKER.length : 0;
+	let remaining = MAX_RECONSTRUCTION_CHARS - heading.length - markerCost -
 		rendered.reduce((total, text) => total + ENTRY_SEPARATOR.length + text.length, 0);
 	if (remaining < 0) {
 		throw new AntigravityAcpError("invalid_input", "The latest Pi tool turn does not fit in the Antigravity ACP context budget");
+	}
+
+	const keptHead: string[] = [];
+	for (const entry of head) {
+		const whole = renderEntry(entry);
+		if (whole.length + ENTRY_SEPARATOR.length <= remaining) {
+			keptHead.push(whole);
+			remaining -= whole.length + ENTRY_SEPARATOR.length;
+			continue;
+		}
+		if (entry.body !== undefined) {
+			const available = remaining - ENTRY_SEPARATOR.length - renderEntry(entry, "").length;
+			const kept = headCodePoints(entry.body, available);
+			if (kept) {
+				const part = renderEntry(entry, kept);
+				keptHead.push(part);
+				remaining -= part.length + ENTRY_SEPARATOR.length;
+			}
+		}
+		break;
 	}
 
 	const grow = (index: number, allowance: number): number => {
@@ -148,8 +177,8 @@ function boundedSection(heading: string, entries: HistoryEntry[]): string {
 	}
 
 	const older: string[] = [];
-	for (let index = pinnedStart - 1; index >= 0; index--) {
-		const entry = entries[index]!;
+	for (let index = middle.length - 1; index >= 0; index--) {
+		const entry = middle[index]!;
 		const whole = renderEntry(entry);
 		if (whole.length + ENTRY_SEPARATOR.length <= remaining) {
 			older.unshift(whole);
@@ -163,7 +192,10 @@ function boundedSection(heading: string, entries: HistoryEntry[]): string {
 		}
 		break;
 	}
-	return [prefix, ...older, ...rendered].join(ENTRY_SEPARATOR);
+	const showMarker = headCount === 0 || (middle.length > 0 && (older.length < middle.length || older[0] !== renderEntry(middle[0]!)));
+	return showMarker
+		? [heading, ...keptHead, TRUNCATION_MARKER, ...older, ...rendered].join(ENTRY_SEPARATOR)
+		: [heading, ...keptHead, ...older, ...rendered].join(ENTRY_SEPARATOR);
 }
 
 function minimalEntry(entry: HistoryEntry): string {
@@ -182,6 +214,16 @@ function renderEntry(entry: HistoryEntry, body = entry.body): string {
 	for (const match of (entry.body ?? "").matchAll(/`+/gu)) longest = Math.max(longest, match[0].length);
 	const fence = "`".repeat(Math.max(3, longest + 1));
 	return `${label}\n${fence}\n${body}\n${fence}`;
+}
+
+/** Prefix in UTF-16 code units, without ending inside a surrogate pair. */
+function headCodePoints(text: string, length: number): string {
+	if (length <= 0) return "";
+	if (length >= text.length) return text;
+	let end = length;
+	const unit = text.charCodeAt(end - 1);
+	if (unit >= 0xd800 && unit <= 0xdbff) end--;
+	return text.slice(0, end);
 }
 
 /** Tail in UTF-16 code units, without starting inside a surrogate pair. */
@@ -217,7 +259,10 @@ function findLatestUserIndex(messages: Message[]): number {
 function formatMessage(message: Message): HistoryEntry[] {
 	// System content/sections are replayed separately as trusted instructions.
 	if (message.role === "system") return [];
-	if (message.role === "user") return [{ label: "## User", body: contentText(message.content) }];
+	if (message.role === "user") {
+		const body = contentText(message.content);
+		return [{ label: "## User", body, summary: body.trimStart().startsWith(COMPACTION_SUMMARY_PREFIX) }];
+	}
 	if (message.role === "assistant") {
 		const texts: string[] = [];
 		const calls: HistoryEntry[] = [];

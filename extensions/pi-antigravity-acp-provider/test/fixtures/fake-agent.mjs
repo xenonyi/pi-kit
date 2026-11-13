@@ -292,6 +292,22 @@ for await (const line of rl) {
 			bridgePromptId = id;
 			const reportUsage = text.includes("usage");
 			if (reportUsage) { usageUpdate(0); usageUpdate(1000); }
+			if (text.includes("bridge immediate-end")) {
+				const headers = Object.fromEntries(mcpServer.headers.map((header) => [header.name, header.value]));
+				const client = new Client({ name: "fake-gemini", version: "1" }, { capabilities: {} });
+				const transport = new StreamableHTTPClientTransport(new URL(mcpServer.url), { requestInit: { headers } });
+				void client.connect(transport).then(() => {
+					const call = client.callTool({ name: "pi_echo", arguments: { text: "from gemini" } });
+					setTimeout(() => {
+						if (bridgePromptId !== id) return;
+						bridgePromptId = undefined;
+						notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Timed out waiting for MCP tool" } });
+						send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+					}, 20);
+					return call;
+				}).finally(() => client.close()).catch(() => undefined);
+				continue;
+			}
 			const invocation = text.includes("parallel")
 				? Promise.all([
 						text.includes("reversed")
@@ -302,6 +318,23 @@ for await (const line of rl) {
 							: new Promise((resolve) => setTimeout(resolve, 50)).then(() => invokeMcpTool(mcpServer, "second")),
 					]).then((results) => results.join(","))
 				: invokeMcpTool(mcpServer, "from gemini");
+			if (text.includes("bridge stray-after-timeout")) {
+				setTimeout(() => {
+					if (bridgePromptId !== id) return;
+					notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "MCP timed out, trying fallback" } });
+					notify({ sessionUpdate: "tool_call", toolCallId: "stray-call-1", title: "ask_question", status: "in_progress" });
+				}, 150);
+				continue;
+			}
+			if (text.includes("bridge early-end")) {
+				setTimeout(() => {
+					if (bridgePromptId !== id) return;
+					bridgePromptId = undefined;
+					notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Timed out waiting for MCP tool" } });
+					send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+				}, 150);
+				continue;
+			}
 			void invocation.then(async (result) => {
 				if (text.includes("bridge delayed")) await new Promise((resolve) => setTimeout(resolve, 500));
 				if (bridgePromptId !== id) return;
@@ -342,6 +375,24 @@ for await (const line of rl) {
 			notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello" } });
 			send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn",
 				usage: { inputTokens: 1000, cachedReadTokens: 400, outputTokens: 150, thoughtTokens: 50, totalTokens: 1200 } } });
+			continue;
+		}
+		if (text === "usage multi double-counted") {
+			usageUpdate(18_000);
+			usageUpdate(22_000);
+			usageUpdate(26_000);
+			notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Multi" } });
+			send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn",
+				usage: { inputTokens: 36_000, cachedReadTokens: 30_000, outputTokens: 300, totalTokens: 36_300 } } });
+			continue;
+		}
+		if (text === "usage multi single-counted") {
+			usageUpdate(16_706);
+			usageUpdate(50_000);
+			usageUpdate(85_490);
+			notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Single" } });
+			send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn",
+				usage: { inputTokens: 15_000, cachedReadTokens: 130_000, outputTokens: 500, totalTokens: 145_500 } } });
 			continue;
 		}
 		if (!continuing && text.includes("hang")) {

@@ -7,7 +7,7 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AntigravityAcpConnection } from "../src/acp/connection.js";
 import { AcpSessionStore } from "../src/acp/session-store.js";
-import { AntigravityRuntime, PERMISSION_TOOL_NAME, PERMISSION_RESULT_KIND } from "../src/runtime.js";
+import { AntigravityRuntime, PERMISSION_TOOL_NAME, PERMISSION_RESULT_KIND, resolveEffectiveContextTokens } from "../src/runtime.js";
 import type { PermissionMode } from "../src/config.js";
 import type { AntigravityQuotaSnapshot } from "../src/acp/usage-quota.js";
 import type { PiEventWriter } from "../src/stream/pi-events.js";
@@ -122,6 +122,20 @@ describe("context size from usage_update", () => {
 		expect(first.usage).toMatchObject({ input: 600, cacheRead: 400, totalTokens: 1200 });
 		const second = await turn(runtime, [user("usage single"), first, user("usage single", 3)]);
 		expect(second.usage).toMatchObject({ input: 600, cacheRead: 400, totalTokens: 1200 });
+	});
+
+	it("removes double-counted cache reads on multi-inference prompts without undercounting single-counted usage", async () => {
+		const { runtime } = setup();
+		const doubled = await turn(runtime, [user("usage multi double-counted")], "usage-multi-double");
+		expect(doubled.usage).toMatchObject({ input: 6000, cacheRead: 30_000, output: 300, totalTokens: 14_182 });
+
+		const singleCounted = await turn(runtime, [user("usage multi single-counted")], "usage-multi-single");
+		expect(singleCounted.usage).toMatchObject({ cacheRead: 130_000, output: 500, totalTokens: 85_490 });
+
+		expect(resolveEffectiveContextTokens(1600, 1600, 1, 400)).toBe(1200);
+		expect(resolveEffectiveContextTokens(26_000, 66_000, 3, 30_000)).toBe(14_182);
+		expect(resolveEffectiveContextTokens(85_490, 978_729, 20, 884_712)).toBe(85_490);
+		expect(resolveEffectiveContextTokens(1800, 2800, 2, 0)).toBe(1800);
 	});
 
 	it("keeps the prompt response usage when the agent sends no usage_update", async () => {
@@ -324,6 +338,94 @@ describe("abort cleanup", () => {
 		binding.turnCompletion = new Promise<void>(() => undefined); controller.abort(); complete(); await pending;
 		expect(binding.connection.cancel).not.toHaveBeenCalled(); expect(binding.connection.close).not.toHaveBeenCalled();
 	});
+
+	it.each(["bridge early-end", "bridge immediate-end"])("cleans up orphaned pendingTools when ACP ends early and replays late tool results (%s)", async (promptText) => {
+		const { runtime, entries } = setup();
+		const first = await drain(runtime.stream(model, { tools, messages: [user(promptText)] }, { sessionId: promptText, apiKey: "test-key" }));
+		expect(first.stopReason).toBe("toolUse");
+		const call = first.content.find((block) => block.type === "toolCall");
+		if (call?.type !== "toolCall") throw new Error("missing tool");
+		await vi.waitFor(async () => {
+			expect((await runtime.snapshot()).processes[0]?.waitingForTools).toBe(0);
+		}, { timeout: 3000 });
+		const second = await drain(runtime.stream(model, {
+			tools,
+			messages: [
+				user(promptText),
+				first,
+				{ role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text: "late user answer" }], isError: false, timestamp: 2 },
+			],
+		}, { sessionId: promptText, apiKey: "test-key" }));
+		expect(second.stopReason).toBe("stop");
+		expect(second.content).toEqual([
+			{ type: "thinking", thinking: "Checking" },
+			{ type: "text", text: "Hello" },
+		]);
+		const prompts = entries().filter((entry) => entry.method === "session/prompt");
+		expect(prompts).toHaveLength(2);
+		expect(JSON.stringify(prompts[1]?.prompt)).toContain("late user answer");
+	});
+
+	it("never hangs on an unclosed writer when stale pendingTools or permission outlives turnCompletion", async () => {
+		const { runtime } = setup();
+		const first = await turn(runtime, [user("hello")], "stale-pending");
+		expect(first.stopReason).toBe("stop");
+		const internals = runtime as unknown as {
+			bindings: Map<string, Promise<{
+				pendingTools: Map<string, unknown>;
+				permission: unknown;
+				turnCompletion: Promise<void> | undefined;
+			}>>;
+		};
+		const binding = await internals.bindings.get("sid:stale-pending");
+		if (!binding) throw new Error("missing binding");
+		expect(binding.turnCompletion).toBeUndefined();
+		const staleResolve = vi.fn();
+		binding.pendingTools.set("stale-call", {
+			invocation: { id: "stale-call", name: "echo", arguments: { text: "hi" } },
+			resolve: staleResolve,
+		});
+		const next = await drain(runtime.stream(model, {
+			tools,
+			messages: [
+				user("hello"),
+				first,
+				{ role: "assistant", content: [{ type: "toolCall", id: "stale-call", name: "echo", arguments: { text: "hi" } }], api: model.api, provider: model.provider, model: model.id, usage: first.usage, stopReason: "toolUse", timestamp: 2 },
+				{ role: "toolResult", toolCallId: "stale-call", toolName: "echo", content: [{ type: "text", text: "late answer" }], isError: false, timestamp: 3 },
+			],
+		}, { sessionId: "stale-pending", apiKey: "test-key" }));
+		expect(next.stopReason).toBe("stop");
+		expect(staleResolve).toHaveBeenCalledWith(expect.objectContaining({ isError: true }));
+		expect(binding.pendingTools.size).toBe(0);
+	});
+
+	it("cancels stray post-timeout ACP updates while Pi is parked and resumes on the same warm session", async () => {
+		const { runtime, entries } = setup();
+		const first = await drain(runtime.stream(model, { tools, messages: [user("use bridge stray-after-timeout")] }, { sessionId: "stray-timeout", apiKey: "test-key" }));
+		expect(first.stopReason).toBe("toolUse");
+		const call = first.content.find((block) => block.type === "toolCall");
+		if (call?.type !== "toolCall") throw new Error("missing tool");
+		await vi.waitFor(async () => {
+			expect((await runtime.snapshot()).processes[0]?.waitingForTools).toBe(0);
+		}, { timeout: 3000 });
+		const second = await drain(runtime.stream(model, {
+			tools,
+			messages: [
+				user("use bridge stray-after-timeout"),
+				first,
+				{ role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text: "user picked option 1" }], isError: false, timestamp: 2 },
+			],
+		}, { sessionId: "stray-timeout", apiKey: "test-key" }));
+		expect(second.stopReason).toBe("stop");
+		expect(second.content).toEqual([
+			{ type: "thinking", thinking: "Checking" },
+			{ type: "text", text: "Hello" },
+		]);
+		expect(entries().filter((entry) => entry.method === "session/new")).toHaveLength(1);
+		const prompts = entries().filter((entry) => entry.method === "session/prompt");
+		expect(prompts).toHaveLength(2);
+		expect(JSON.stringify(prompts[1]?.prompt)).toContain("user picked option 1");
+	});
 });
 
 describe("quota exhaustion", () => {
@@ -391,7 +493,7 @@ describe("context handoff transport", () => {
 			{ role: "assistant", content: [{ type: "toolCall", id: "external-call", name: "read", arguments: { path: "a.ts" } }],
 				api: model.api, provider: "other-provider", model: "external", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 2 },
-			{ role: "toolResult", toolCallId: "external-call", toolName: "read", content: [{ type: "text", text: "x".repeat(40_000) + "RESULT_TAIL" }], isError: false, timestamp: 3 },
+			{ role: "toolResult", toolCallId: "external-call", toolName: "read", content: [{ type: "text", text: "x".repeat(140_000) + "RESULT_TAIL" }], isError: false, timestamp: 3 },
 			{ role: "system", content: "NEW_RULE", sections: { rule: "UPDATED_RULE" }, timestamp: 4 },
 		] });
 		const response = await drain(runtime.stream({ ...model, input: ["text", "image"] }, context, { sessionId: "handoff", apiKey: "test-key" }));
@@ -409,7 +511,7 @@ describe("context handoff transport", () => {
 		expect(reconstruction).toContain("[tool call read id=external-call]");
 		expect(reconstruction).toContain("## Tool result (read id=external-call)");
 		expect(reconstruction).toContain("RESULT_TAIL");
-		expect(reconstruction.slice(reconstruction.indexOf("# Prior conversation")).length).toBeLessThanOrEqual(32_000);
+		expect(reconstruction.slice(reconstruction.indexOf("# Prior conversation")).length).toBeLessThanOrEqual(128_000);
 	});
 });
 

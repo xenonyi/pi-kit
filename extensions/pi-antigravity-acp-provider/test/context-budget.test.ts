@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { buildPromptParts } from "../src/stream/context.js";
 import { usageFromPrompt } from "../src/stream/usage.js";
 
-const LIMIT = 32_000;
+const LIMIT = 128_000;
+const COMPACTION_PREFIX = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
 const IMAGE = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
 function assistant(content: AssistantMessage["content"]): AssistantMessage {
 	return { role: "assistant", content, api: "antigravity-acp", provider: "antigravity-acp", model: "auto",
@@ -28,7 +29,7 @@ function resourceText(block: unknown): string {
 
 describe("bounded context reconstruction", () => {
 	it("delivers the active request and images explicitly despite an oversized tool result", () => {
-		const { prompt } = buildPromptParts(toolContext("x".repeat(40_000) + "RESULT_TAIL"), true);
+		const { prompt } = buildPromptParts(toolContext("x".repeat(140_000) + "RESULT_TAIL"), true);
 		const history = resourceText(prompt[0]);
 		expect(history.length).toBeLessThanOrEqual(LIMIT);
 		expect(history).toContain("[truncated older context]");
@@ -43,7 +44,7 @@ describe("bounded context reconstruction", () => {
 	});
 
 	it("preserves Pi transcript instructions independently of the history budget", () => {
-		const context = toolContext("x".repeat(40_000));
+		const context = toolContext("x".repeat(140_000));
 		const instructions = "  PRESERVE_SPACES  " + "π".repeat(20_000);
 		context.messages.unshift({ role: "system", content: instructions, sections: { rule: "old", removed: "obsolete" }, timestamp: 0 });
 		context.messages.push({ role: "system", content: "ADDITIONAL_RULE", sections: { rule: "NEW_RULE", removed: null }, timestamp: 4 });
@@ -59,14 +60,14 @@ describe("bounded context reconstruction", () => {
 
 	it("never truncates the explicit current request", () => {
 		const request = "REQUEST_START" + "q".repeat(50_000) + "REQUEST_END";
-		const context = toolContext("x".repeat(40_000));
+		const context = toolContext("x".repeat(140_000));
 		context.messages[0] = { role: "user", content: request, timestamp: 1 };
 		expect(buildPromptParts(context, true).prompt.at(-1)).toEqual({ type: "text", text: request });
 	});
 
 	it("keeps a small tool result whole even when call arguments are huge", () => {
 		const context = toolContext("RESULT_OK");
-		context.messages[1] = assistant([{ type: "toolCall", id: "call-1", name: "read", arguments: { text: "x".repeat(40_000) + "ARGS_TAIL" } }]);
+		context.messages[1] = assistant([{ type: "toolCall", id: "call-1", name: "read", arguments: { text: "x".repeat(140_000) + "ARGS_TAIL" } }]);
 		const text = resourceText(buildPromptParts(context, true).prompt[0]);
 		expect(text.length).toBeLessThanOrEqual(LIMIT);
 		expect(text).toContain("[tool call read id=call-1] [truncated]");
@@ -76,12 +77,12 @@ describe("bounded context reconstruction", () => {
 
 	it("retains every parallel call/result identity and drops older history first", () => {
 		const context = toolContext("first");
-		context.messages.unshift({ role: "user", content: "OLD_CANARY" + "o".repeat(40_000), timestamp: 0 });
+		context.messages.unshift({ role: "user", content: "OLD_CANARY" + "o".repeat(140_000), timestamp: 0 });
 		context.messages[2] = assistant([
 			{ type: "toolCall", id: "call-1", name: "read", arguments: {} },
 			{ type: "toolCall", id: "call-2", name: "write", arguments: {} },
 		]);
-		context.messages.push(result("x".repeat(40_000) + "SECOND_TAIL", "call-2", "write"));
+		context.messages.push(result("x".repeat(140_000) + "SECOND_TAIL", "call-2", "write"));
 		const text = resourceText(buildPromptParts(context, true).prompt[0]);
 		expect(text.length).toBeLessThanOrEqual(LIMIT);
 		for (const label of ["[tool call read id=call-1]", "[tool call write id=call-2]", "## Tool result (read id=call-1)", "## Tool result (write id=call-2)"]) expect(text).toContain(label);
@@ -114,8 +115,8 @@ describe("bounded context reconstruction", () => {
 
 	it("does not split surrogate pairs or lose truncation fences", () => {
 		for (const name of ["read", "reads"]) {
-			const context = toolContext("😀".repeat(20_000) + "END");
-			context.messages[2] = result("😀".repeat(20_000) + "END", "call-1", name);
+			const context = toolContext("😀".repeat(70_000) + "END");
+			context.messages[2] = result("😀".repeat(70_000) + "END", "call-1", name);
 			const text = resourceText(buildPromptParts(context, true).prompt[0]);
 			expect(text.length).toBeLessThanOrEqual(LIMIT);
 			expect(text).toContain("😀END");
@@ -131,7 +132,7 @@ describe("bounded context reconstruction", () => {
 	});
 
 	it("bounds warm external deltas and explicitly sends an unseen request", () => {
-		const context = toolContext("x".repeat(40_000) + "RESULT_TAIL");
+		const context = toolContext("x".repeat(140_000) + "RESULT_TAIL");
 		const { prompt } = buildPromptParts(context, false, 0);
 		const text = resourceText(prompt[0]);
 		expect(text.length).toBeLessThanOrEqual(LIMIT);
@@ -166,5 +167,68 @@ describe("bounded context reconstruction", () => {
 		] };
 		expect(buildPromptParts(context, true).prompt.at(-1)).toEqual({ type: "text", text: "REQUEST" });
 		expect(buildPromptParts(context, false, 0).prompt).toEqual([{ type: "text", text: "REQUEST" }]);
+	});
+
+	it("preserves leading compaction summaries before truncating older mid-history turns", () => {
+		const summary1 = `${COMPACTION_PREFIX}SUMMARY_SEGMENT_1\n</summary>`;
+		const summary2 = `${COMPACTION_PREFIX}SUMMARY_SEGMENT_2\n</summary>`;
+		const context: Context = {
+			systemPrompt: "SYSTEM_RULES",
+			messages: [
+				{ role: "user", content: summary1, timestamp: 1 },
+				{ role: "user", content: summary2, timestamp: 2 },
+				{ role: "user", content: "DROPPED_MID_TURN " + "m".repeat(140_000), timestamp: 3 },
+				{ role: "user", content: "RECENT_TAIL_TURN", timestamp: 4 },
+				{ role: "user", content: "ACTIVE_REQUEST", timestamp: 5 },
+			],
+		};
+		const text = resourceText(buildPromptParts(context, true).prompt[0]);
+		const history = text.slice(text.indexOf("# Prior conversation"));
+		expect(history.length).toBeLessThanOrEqual(LIMIT);
+		expect(history).toContain("SUMMARY_SEGMENT_1");
+		expect(history).toContain("SUMMARY_SEGMENT_2");
+		expect(history).toContain("RECENT_TAIL_TURN");
+		expect(history).not.toContain("DROPPED_MID_TURN");
+		expect(history.indexOf("SUMMARY_SEGMENT_2")).toBeLessThan(history.indexOf("[truncated older context]"));
+		expect(history.indexOf("[truncated older context]")).toBeLessThan(history.indexOf("RECENT_TAIL_TURN"));
+	});
+
+	it("truncates an oversized compaction summary cleanly without breaking surrogate pairs", () => {
+		const context: Context = {
+			messages: [
+				{ role: "user", content: `${COMPACTION_PREFIX}SUMMARY_HEAD_` + "😀".repeat(70_000) + "\n</summary>", timestamp: 1 },
+				{ role: "user", content: "ACTIVE_REQUEST", timestamp: 2 },
+			],
+		};
+		const text = resourceText(buildPromptParts(context, true).prompt[0]);
+		expect(text.length).toBeLessThanOrEqual(LIMIT);
+		expect(text).toContain("SUMMARY_HEAD_");
+		expect(text).not.toMatch(/[\uD800-\uDFFF]/u);
+	});
+
+	it("uses deterministic stable URIs for context and external-delta resources", () => {
+		const summary = `${COMPACTION_PREFIX}APPEND_ONLY_PREFIX\n</summary>`;
+		const first = buildPromptParts({
+			systemPrompt: "STABLE_RULES",
+			messages: [
+				{ role: "user", content: summary, timestamp: 1 },
+				{ role: "user", content: "REQ_1", timestamp: 2 },
+			],
+		}, true);
+		const second = buildPromptParts({
+			systemPrompt: "STABLE_RULES",
+			messages: [
+				{ role: "user", content: summary, timestamp: 1 },
+				{ role: "user", content: "REQ_1", timestamp: 2 },
+				assistant([{ type: "text", text: "ANS_1" }]),
+				{ role: "user", content: "REQ_2", timestamp: 3 },
+			],
+		}, true);
+		expect(first.prompt[0]).toMatchObject({ type: "resource", resource: { uri: "urn:pi:antigravity-acp:context" } });
+		expect(second.prompt[0]).toMatchObject({ type: "resource", resource: { uri: "urn:pi:antigravity-acp:context" } });
+		const firstPrefix = resourceText(first.prompt[0]).split("## User")[0]!;
+		expect(resourceText(second.prompt[0]).startsWith(firstPrefix)).toBe(true);
+		const delta = buildPromptParts(toolContext("RESULT_OK"), false, 0);
+		expect(delta.prompt[0]).toMatchObject({ type: "resource", resource: { uri: "urn:pi:antigravity-acp:external-delta" } });
 	});
 });

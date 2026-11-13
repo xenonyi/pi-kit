@@ -116,8 +116,9 @@ interface Binding {
 	turnBuffer: TurnOutputBuffer | undefined;
 	permission: PendingPermission | undefined;
 	pendingTools: Map<string, PendingPiTool>;
-	/** Latest `usage_update.used` and the inference count of the running ACP prompt. */
+	/** Latest `usage_update.used`, sum across inferences, and inference count of the running ACP prompt. */
 	contextUsed: number | undefined;
+	contextUsedSum: number;
 	inferences: number;
 	turnsInAcpSession: number;
 	consecutiveTransportFailures: number;
@@ -127,6 +128,7 @@ interface Binding {
 	omittedTools: ToolOmission[];
 	turnCompletion: Promise<void> | undefined;
 	abortRequested: boolean;
+	strayContinuationCancelled: boolean;
 	piSessionId: string | undefined;
 	apiKey: string | undefined;
 	quotaSessionIds: Set<string>;
@@ -859,6 +861,9 @@ export class AntigravityRuntime {
 
 		// A permission tool result resumes the still-running ACP prompt rather than
 		// starting a second Antigravity turn.
+		if (binding.permission && !binding.turnCompletion) {
+			cancelPermission(binding);
+		}
 		if (binding.permission) {
 			const pending = binding.permission;
 			const result = findPermissionResult(context, pending.id);
@@ -884,10 +889,16 @@ export class AntigravityRuntime {
 					pending.resolve({ outcome: { outcome: "cancelled" } });
 				}
 				await this.awaitContinuation(binding, options.signal);
+				if (!writer.finished) {
+					writer.fail(new AntigravityAcpError("protocol", "Antigravity turn ended before completing the permission continuation"));
+				}
 				return;
 			}
 		}
 
+		if (binding.pendingTools.size > 0 && !binding.turnCompletion) {
+			cancelPiTools(binding, "Antigravity turn ended before Pi returned the tool result");
+		}
 		if (binding.pendingTools.size > 0) {
 			const results = [...binding.pendingTools.values()].map((pending) => ({
 				pending,
@@ -908,6 +919,9 @@ export class AntigravityRuntime {
 					pending.resolve(toMcpToolResult(message as ToolResultMessage));
 				}
 				await this.awaitContinuation(binding, options.signal);
+				if (!writer.finished) {
+					writer.fail(new AntigravityAcpError("protocol", "Antigravity turn ended before completing the tool continuation"));
+				}
 				return;
 			}
 		}
@@ -957,8 +971,10 @@ export class AntigravityRuntime {
 		} finally {
 			binding.turnCompletion = undefined;
 			binding.abortRequested = false;
+			binding.strayContinuationCancelled = false;
 			binding.writer = undefined;
 			binding.turnBuffer = undefined;
+			cancelTurnInteractions(binding, "Antigravity turn ended before Pi returned the tool result");
 			release();
 			if (this.queues.get(key) === queue) this.queues.delete(key);
 			if (!persistent) await this.dropBinding(key, binding);
@@ -1027,6 +1043,7 @@ export class AntigravityRuntime {
 				binding.pendingContextCount = 0;
 				binding.pendingContextFingerprint = messagesFingerprint([]);
 				binding.contextUsed = undefined;
+				binding.contextUsedSum = 0;
 				binding.inferences = 0;
 				binding.turnsInAcpSession = 0;
 				binding.consecutiveTransportFailures = 0;
@@ -1102,7 +1119,9 @@ export class AntigravityRuntime {
 			binding.pendingContextCount = context.messages.length;
 			binding.pendingContextFingerprint = messagesFingerprint(context.messages);
 			binding.contextUsed = undefined;
+			binding.contextUsedSum = 0;
 			binding.inferences = 0;
+			binding.strayContinuationCancelled = false;
 
 			let completeTurn: (() => void) | undefined;
 			let onTurnAbort: (() => void) | undefined;
@@ -1116,6 +1135,20 @@ export class AntigravityRuntime {
 				if (options.signal.aborted) onTurnAbort();
 			}
 
+			const settleAttempt = (outcome?: { error: unknown; aborted: boolean }): void => {
+				binding.turnCompletion = undefined;
+				if (outcome) {
+					cancelTurnInteractions(
+						binding,
+						outcome.aborted
+							? "Pi turn was aborted before returning the tool result"
+							: "Antigravity turn ended before Pi returned the tool result",
+					);
+					(binding.writer ?? writer).fail(outcome.error, outcome.aborted);
+				}
+				completeTurn?.();
+			};
+
 			let response: Awaited<ReturnType<AntigravityAcpConnection["prompt"]>>;
 			try {
 				response = await binding.connection.prompt(
@@ -1124,10 +1157,11 @@ export class AntigravityRuntime {
 				);
 			} catch (error) {
 				if (onTurnAbort) options.signal?.removeEventListener("abort", onTurnAbort);
-				completeTurn?.();
-				binding.turnCompletion = undefined;
 
-				if (isAbort(error) || binding.abortRequested) throw error;
+				if (isAbort(error) || binding.abortRequested) {
+					settleAttempt({ error, aborted: true });
+					throw error;
+				}
 				const nonRetryableCode = error instanceof AntigravityAcpError &&
 					(error.code === "auth" || error.code === "quota" || error.code === "invalid_input");
 				const canRecover =
@@ -1135,7 +1169,12 @@ export class AntigravityRuntime {
 					!turnBuffer.hasCommittedOutput &&
 					attempt < maxRetries &&
 					(isRetryablePromptError(error) || isWedgedSessionError(error) || !binding.connection.process.alive);
-				if (!canRecover) throw error;
+				if (!canRecover) {
+					settleAttempt({ error, aborted: false });
+					throw error;
+				}
+				cancelTurnInteractions(binding, "Antigravity turn ended before Pi returned the tool result");
+				settleAttempt();
 
 				binding.consecutiveTransportFailures += 1;
 				const closed = !binding.connection.process.alive || isConnectionClosedError(error);
@@ -1156,12 +1195,14 @@ export class AntigravityRuntime {
 			}
 
 			if (onTurnAbort) options.signal?.removeEventListener("abort", onTurnAbort);
-			completeTurn?.();
-			binding.turnCompletion = undefined;
 
 			const activeWriter = binding.writer ?? writer;
 			const activeBuffer = binding.turnBuffer ?? turnBuffer;
-			if (binding.abortRequested) throw abortError();
+			if (binding.abortRequested) {
+				const aborted = abortError();
+				settleAttempt({ error: aborted, aborted: true });
+				throw aborted;
+			}
 			const usage = usageFromPrompt(response);
 			this.metrics.record(response, usage);
 
@@ -1174,10 +1215,13 @@ export class AntigravityRuntime {
 			);
 			if (endTurnError) {
 				if (!endTurnError.retryable) {
+					settleAttempt({ error: endTurnError.error, aborted: false });
 					throw endTurnError.error;
 				}
 				binding.consecutiveTransportFailures += 1;
 				if (!activeBuffer.hasCommittedOutput && attempt < maxRetries) {
+					cancelTurnInteractions(binding, "Antigravity turn ended before Pi returned the tool result");
+					settleAttempt();
 					if (
 						!binding.connection.process.alive ||
 						endTurnError.wedged ||
@@ -1188,20 +1232,31 @@ export class AntigravityRuntime {
 					await sleepWithAbort(this.retryDelaysMs[attempt]!, options.signal);
 					continue;
 				}
+				settleAttempt({ error: endTurnError.error, aborted: false });
 				throw endTurnError.error;
 			}
+
+			if (binding.toolBatchTimer && !activeWriter.finished && binding.pendingTools.size > 0) {
+				clearTimeout(binding.toolBatchTimer);
+				binding.toolBatchTimer = undefined;
+				activeWriter.done("toolUse");
+			}
+			cancelTurnInteractions(binding, "Antigravity turn ended before Pi returned the tool result");
 
 			activeBuffer.flushText();
 			binding.consecutiveTransportFailures = 0;
 			binding.turnsInAcpSession += 1;
 			if (binding.contextUsed !== undefined) {
-				// Pi sizes the context from the last message's totalTokens, but the response sums every
-				// inference. agy adds cache reads to `used` twice; with one inference the response's cache
-				// count is that inference's, so subtracting it is exact. Longer prompts with cache reads
-				// still overcount by the last inference's cached tokens.
+				const totalTokens = resolveEffectiveContextTokens(
+					binding.contextUsed,
+					binding.contextUsedSum,
+					binding.inferences,
+					usage.cacheRead,
+				);
+				binding.contextUsed = totalTokens;
 				activeWriter.message.usage = {
 					...usage,
-					totalTokens: binding.inferences === 1 ? Math.max(0, binding.contextUsed - usage.cacheRead) : binding.contextUsed,
+					totalTokens,
 				};
 			} else activeWriter.message.usage = usage;
 			activeWriter.message.rawStopReason = response.stopReason;
@@ -1210,8 +1265,15 @@ export class AntigravityRuntime {
 			binding.expectedAssistantFingerprint = messageFingerprint(activeWriter.message);
 			this.persistBinding(binding);
 			switch (response.stopReason) {
-				case "cancelled":
-					throw abortError();
+				case "cancelled": {
+					if (binding.strayContinuationCancelled && !binding.abortRequested) {
+						activeWriter.done("stop");
+						break;
+					}
+					const aborted = abortError();
+					settleAttempt({ error: aborted, aborted: true });
+					throw aborted;
+				}
 				case "max_tokens":
 				case "max_turn_requests":
 					activeWriter.done("length");
@@ -1219,6 +1281,7 @@ export class AntigravityRuntime {
 				default:
 					activeWriter.done("stop");
 			}
+			settleAttempt();
 			return binding;
 		}
 	}
@@ -1434,6 +1497,7 @@ export class AntigravityRuntime {
 				permission: undefined,
 				pendingTools: new Map(),
 				contextUsed: undefined,
+				contextUsedSum: 0,
 				inferences: 0,
 				turnsInAcpSession: 0,
 				consecutiveTransportFailures: 0,
@@ -1443,6 +1507,7 @@ export class AntigravityRuntime {
 				omittedTools,
 				turnCompletion: undefined,
 				abortRequested: false,
+				strayContinuationCancelled: false,
 				piSessionId,
 				apiKey,
 				quotaSessionIds,
@@ -1566,6 +1631,17 @@ export class AntigravityRuntime {
 			return;
 		}
 		if (!binding.writer) return;
+		if (
+			binding.writer.finished &&
+			(binding.pendingTools.size > 0 || binding.permission !== undefined) &&
+			isStrayPostToolUpdate(notification.update.sessionUpdate)
+		) {
+			if (!binding.strayContinuationCancelled && !binding.abortRequested) {
+				binding.strayContinuationCancelled = true;
+				void binding.connection.cancel(binding.session.sessionId).catch(() => undefined);
+			}
+			return;
+		}
 		const turnBuffer = binding.turnBuffer;
 		for (const activity of mapSessionUpdate(notification)) {
 			if (activity.type === "text") {
@@ -1582,6 +1658,7 @@ export class AntigravityRuntime {
 				else binding.writer.thinking(activity.text);
 			} else if (activity.type === "usage") {
 				binding.contextUsed = activity.used;
+				binding.contextUsedSum += activity.used;
 				binding.inferences += 1;
 				if (!binding.writer.finished) binding.writer.message.usage.totalTokens = activity.used;
 			}
@@ -1846,10 +1923,23 @@ function instructionFingerprint(context: Context): string {
 	return createHash("sha256").update(currentSystemInstructions(context)).digest("hex");
 }
 
+function isStrayPostToolUpdate(sessionUpdate: SessionNotification["update"]["sessionUpdate"]): boolean {
+	return (
+		sessionUpdate === "agent_message_chunk" ||
+		sessionUpdate === "agent_thought_chunk" ||
+		sessionUpdate === "plan" ||
+		sessionUpdate === "tool_call"
+	);
+}
+
+function cancelTurnInteractions(binding: Binding, reason: string): void {
+	cancelPermission(binding);
+	cancelPiTools(binding, reason);
+}
+
 function abortTurn(binding: Binding): void {
 	binding.abortRequested = true;
-	cancelPermission(binding);
-	cancelPiTools(binding, "Pi turn was aborted before returning the tool result");
+	cancelTurnInteractions(binding, "Pi turn was aborted before returning the tool result");
 }
 
 function cancelPiTools(binding: Binding, reason: string): void {
@@ -1905,4 +1995,29 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
 		};
 		signal?.addEventListener("abort", onAbort, { once: true });
 	});
+}
+
+/**
+ * Removes double-counted cache reads from `usage_update.used` when the ACP agent reports
+ * `used` with `cacheRead` added twice. For single-inference prompts, `usage.cacheRead` equals that
+ * inference's cache read; for multi-inference prompts, the final inference's share is estimated
+ * proportionally from `contextUsed / contextUsedSum`, gated on `contextUsedSum >= 2 * cacheRead`
+ * so agents reporting single-counted `used` are not undercounted.
+ */
+export function resolveEffectiveContextTokens(
+	contextUsed: number,
+	contextUsedSum: number,
+	inferences: number,
+	cacheRead: number,
+): number {
+	if (cacheRead <= 0) return contextUsed;
+	if (inferences <= 1) {
+		return contextUsed >= 2 * cacheRead ? Math.max(0, contextUsed - cacheRead) : contextUsed;
+	}
+	if (contextUsedSum <= 0 || contextUsedSum < 2 * cacheRead) return contextUsed;
+	const estimatedLastCacheRead = Math.min(
+		Math.round((cacheRead * contextUsed) / contextUsedSum),
+		Math.floor(contextUsed / 2),
+	);
+	return Math.max(0, contextUsed - estimatedLastCacheRead);
 }
