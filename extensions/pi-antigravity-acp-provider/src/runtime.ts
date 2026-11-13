@@ -16,16 +16,22 @@ import {
 	type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 
 import {
 	clearAntigravityCredentials,
 	inspectAntigravityAuth,
+	isAgyCli,
 	removeConversation,
+	resolveAntigravityAcpLaunch,
 	type AntigravityAuthHealth,
 } from "./acp/antigravity.js";
 import { AntigravityAcpConnection, type AntigravityConnectionHandlers, type AntigravityConnectionOptions } from "./acp/connection.js";
-import { abortError, AntigravityAcpError, errorMessage } from "./acp/errors.js";
+import { applyCredentialStorageEnvironment } from "./acp/credential-storage.js";
+import { abortError, AntigravityAcpError, errorMessage, redact } from "./acp/errors.js";
+import { applyDefaultTlsEnvironment } from "./acp/process.js";
+import { applyAcpProxyEnvironment } from "./acp/proxy.js";
 import {
 	classifyEndTurnError,
 	isConnectionClosedError,
@@ -96,6 +102,8 @@ interface Binding {
 	initialize: InitializeResponse;
 	session: AcpNewSessionResponse;
 	mode: PermissionMode;
+	acpModeId: string;
+	dangerSkipPermissions: boolean;
 	instructionsFingerprint: string | undefined;
 	needsReconstruction: boolean;
 	modelId: string;
@@ -129,6 +137,7 @@ interface StandbyConnection {
 	connection: AntigravityAcpConnection;
 	initialize: InitializeResponse;
 	apiKey: string | undefined;
+	dangerSkipPermissions: boolean;
 	quotaSessionIds: Set<string>;
 }
 
@@ -219,10 +228,16 @@ export class AntigravityRuntime {
 	/** Pre-warms a standby ACP process and runs handshake + auth off the critical path. */
 	async prewarm(apiKey?: string): Promise<void> {
 		if (this.disposed) return;
+		const dangerSkipPermissions = wantsDangerSkipPermissions(this.permissionMode);
 		const existing = this.standby;
 		if (existing) {
 			const settled = await existing.catch(() => undefined);
-			if (settled && settled.connection.process.alive && normalizeAuthKey(settled.apiKey) === normalizeAuthKey(apiKey)) {
+			if (
+				settled &&
+				settled.connection.process.alive &&
+				settled.dangerSkipPermissions === dangerSkipPermissions &&
+				normalizeAuthKey(settled.apiKey) === normalizeAuthKey(apiKey)
+			) {
 				return;
 			}
 			if (this.standby === existing) this.standby = undefined;
@@ -235,6 +250,7 @@ export class AntigravityRuntime {
 			this.assertEpoch(epoch);
 			const connection = this.createConnection({
 				cwd: process.cwd(),
+				dangerSkipPermissions,
 				handlers: {
 					onUpdate: ({ sessionId, update }) => {
 						if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
@@ -253,6 +269,7 @@ export class AntigravityRuntime {
 					connection,
 					initialize,
 					apiKey,
+					dangerSkipPermissions,
 					quotaSessionIds: new Set(),
 				};
 				void connection.process.exited.then(() => {
@@ -348,6 +365,15 @@ export class AntigravityRuntime {
 	private async fetchQuota(apiKey: string | undefined): Promise<AntigravityQuotaSnapshot> {
 		this.assertActive();
 		const epoch = this.bindingEpoch;
+		if (this.ensureAgent) {
+			await ensureAntigravityAcpReady();
+			this.assertEpoch(epoch);
+			const launch = resolveAntigravityAcpLaunch();
+			if (isAgyCli(launch.command)) {
+				return this.runCliUsageQuota(launch.command, apiKey);
+			}
+		}
+
 		const normalizedKey = normalizeAuthKey(apiKey);
 		const idleBinding = [...this.resolvedBindings].find(
 			(candidate) =>
@@ -412,6 +438,74 @@ export class AntigravityRuntime {
 				for (const qid of ownedQuotaSessions) removeConversation(qid);
 			}
 		}
+	}
+
+	private async runCliUsageQuota(command: string, apiKey: string | undefined): Promise<AntigravityQuotaSnapshot> {
+		const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+		if (apiKey && apiKey !== MANAGED_AUTH_MARKER) {
+			baseEnv.GEMINI_API_KEY = apiKey;
+		}
+		const env = applyCredentialStorageEnvironment(
+			applyDefaultTlsEnvironment(applyAcpProxyEnvironment(baseEnv)),
+		);
+		return new Promise<AntigravityQuotaSnapshot>((resolve, reject) => {
+			let stdout = "";
+			let stderr = "";
+			let settled = false;
+			const child = spawn(command, ["-p", "/usage"], {
+				cwd: process.cwd(),
+				env,
+				stdio: ["ignore", "pipe", "pipe"],
+				shell: false,
+				windowsHide: true,
+			});
+			const finish = (err?: Error, value?: AntigravityQuotaSnapshot) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				if (err) reject(err);
+				else resolve(value!);
+			};
+			const timer = setTimeout(() => {
+				child.kill("SIGKILL");
+				finish(new AntigravityAcpError("timeout", "Antigravity CLI quota query timed out"));
+			}, QUOTA_TIMEOUT_MS);
+			timer.unref?.();
+
+			child.stdout.setEncoding("utf8");
+			child.stdout.on("data", (chunk: string) => {
+				stdout += chunk;
+			});
+			child.stderr.setEncoding("utf8");
+			child.stderr.on("data", (chunk: string) => {
+				stderr += chunk;
+				if (/authentication required/iu.test(stderr)) {
+					child.kill("SIGKILL");
+					finish(new AntigravityAcpError("auth", "Antigravity CLI requires authentication. Run /login or /antigravity-acp setup."));
+				}
+			});
+			child.once("error", (cause) => {
+				finish(new AntigravityAcpError("spawn", `Failed to run ${command} -p /usage: ${cause.message}`, { cause }));
+			});
+			child.once("close", (code, signal) => {
+				if (settled) return;
+				if (code === 0) {
+					try {
+						finish(undefined, parseUsageQuota(stdout));
+					} catch (error) {
+						finish(error instanceof Error ? error : new AntigravityAcpError("protocol", errorMessage(error)));
+					}
+					return;
+				}
+				const combined = redact(`${stderr}\n${stdout}`.trim());
+				if (/authentication required|not authenticated|credentials/iu.test(combined)) {
+					finish(new AntigravityAcpError("auth", combined || "Antigravity CLI requires authentication"));
+					return;
+				}
+				const status = signal ? `signal ${signal}` : `code ${String(code)}`;
+				finish(new AntigravityAcpError("protocol", `Antigravity CLI quota query failed (${status})${combined ? `: ${combined}` : ""}`));
+			});
+		});
 	}
 
 	private async runQuotaQuery(
@@ -569,6 +663,28 @@ export class AntigravityRuntime {
 	}
 
 	async logout(): Promise<void> {
+		const candidates: AntigravityAcpConnection[] = [];
+		for (const binding of this.resolvedBindings) {
+			if (
+				!binding.turnCompletion &&
+				binding.connection.process.alive &&
+				binding.initialize.agentCapabilities?.auth?.logout
+			) {
+				candidates.push(binding.connection);
+			}
+		}
+		if (candidates.length === 0 && this.standby) {
+			const standby = await this.standby.catch(() => undefined);
+			if (standby?.connection.process.alive && standby.initialize.agentCapabilities?.auth?.logout) {
+				candidates.push(standby.connection);
+			}
+		}
+		if (candidates.length > 0) {
+			await Promise.race([
+				candidates[0]!.logout().catch(() => undefined),
+				sleepWithAbort(2_000).catch(() => undefined),
+			]);
+		}
 		await this.closeBindings();
 		this.quotaCache = undefined;
 		this.sessionStore?.clear();
@@ -579,13 +695,37 @@ export class AntigravityRuntime {
 		const change = this.modeChanges.then(async () => {
 			this.assertActive();
 			this.permissionMode = mode;
+			const dangerSkipPermissions = wantsDangerSkipPermissions(mode);
+			const pendingStandby = this.standby;
+			if (pendingStandby) {
+				const settled = await pendingStandby.catch(() => undefined);
+				if (settled && settled.dangerSkipPermissions !== dangerSkipPermissions && this.standby === pendingStandby) {
+					this.standby = undefined;
+					await settled.connection.close().catch(() => undefined);
+				}
+			}
 			await Promise.all([...this.resolvedBindings].map(async (binding) => {
-				if (binding.mode === mode && this.confirmedMode(binding) === mode) return;
-				// Never change policy under an executing turn or leave an unsupported session alive.
-				if (!binding.turnCompletion && supportsMode(binding.connection.getSessionState(binding.session.sessionId), mode)) {
+				const sessionState = binding.connection.getSessionState(binding.session.sessionId);
+				const acpModeId = resolveAcpSessionMode(sessionState, mode);
+				if (
+					binding.mode === mode &&
+					binding.dangerSkipPermissions === dangerSkipPermissions &&
+					acpModeId !== undefined &&
+					this.confirmedMode(binding) === acpModeId
+				) {
+					return;
+				}
+				// Never change policy under an executing turn, mix yolo process flags, or leave an unsupported session alive.
+				if (!binding.turnCompletion && binding.dangerSkipPermissions === dangerSkipPermissions && acpModeId !== undefined) {
 					try {
-						await binding.connection.setMode(binding.session.sessionId, mode);
-						if (this.confirmedMode(binding) === mode) { binding.mode = mode; return; }
+						if (this.confirmedMode(binding) !== acpModeId) {
+							await binding.connection.setMode(binding.session.sessionId, acpModeId);
+						}
+						if (this.confirmedMode(binding) === acpModeId) {
+							binding.mode = mode;
+							binding.acpModeId = acpModeId;
+							return;
+						}
 					} catch { /* Close below; the next turn must negotiate again. */ }
 				}
 				await this.invalidateBinding(binding);
@@ -620,7 +760,7 @@ export class AntigravityRuntime {
 					waitingForPermission: binding.permission !== undefined,
 					waitingForTools: binding.pendingTools.size,
 					agentVersion: binding.initialize.agentInfo?.version,
-					mcpHttp: binding.initialize.agentCapabilities?.mcpCapabilities?.http === true,
+					mcpHttp: supportsMcpHttp(binding.initialize),
 					restored: binding.restored,
 					ignoredStdoutNoiseLines: binding.connection.process.ignoredStdoutNoiseLines,
 					...(includeStderr ? { stderrTail: binding.connection.process.stderrTail } : {}),
@@ -707,8 +847,12 @@ export class AntigravityRuntime {
 		await this.modeChanges;
 		this.assertEpoch(epoch);
 		// Check before continuation early returns as well as before fresh prompts.
-		if (binding.mode !== this.permissionMode || this.confirmedMode(binding) !== this.permissionMode ||
-			binding.toolFingerprint !== piToolFingerprint(tools)) {
+		if (
+			binding.mode !== this.permissionMode ||
+			binding.dangerSkipPermissions !== wantsDangerSkipPermissions(this.permissionMode) ||
+			this.confirmedMode(binding) !== binding.acpModeId ||
+			binding.toolFingerprint !== piToolFingerprint(tools)
+		) {
 			await this.invalidateBinding(binding);
 			binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
 		}
@@ -780,8 +924,10 @@ export class AntigravityRuntime {
 			// A queued caller may hold an obsolete binding after shutdown/mode changes.
 			binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
 			if (
-				binding.needsReconstruction || binding.mode !== this.permissionMode ||
-				this.confirmedMode(binding) !== this.permissionMode ||
+				binding.needsReconstruction ||
+				binding.mode !== this.permissionMode ||
+				binding.dangerSkipPermissions !== wantsDangerSkipPermissions(this.permissionMode) ||
+				this.confirmedMode(binding) !== binding.acpModeId ||
 				binding.toolFingerprint !== piToolFingerprint(tools) ||
 				context.messages.length < binding.messageCount ||
 				messagesFingerprint(context.messages.slice(0, binding.messageCount)) !==
@@ -846,22 +992,24 @@ export class AntigravityRuntime {
 		forceProcessReplace = false,
 	): Promise<Binding> {
 		if (binding.piSessionId) this.sessionStore?.remove(binding.piSessionId);
-		if (!forceProcessReplace && binding.connection.process.alive) {
+		const dangerSkipPermissions = wantsDangerSkipPermissions(this.permissionMode);
+		if (!forceProcessReplace && binding.connection.process.alive && binding.dangerSkipPermissions === dangerSkipPermissions) {
 			try {
 				const mcpServer = binding.bridge ? await binding.bridge.start() : undefined;
 				const mcpServers = mcpServer ? [mcpServer] : [];
 				const session = await binding.connection.newSession(binding.cwd, signal, mcpServers);
 				const mode = this.permissionMode;
-				if (!supportsMode(session, mode)) {
+				const acpModeId = resolveAcpSessionMode(session, mode);
+				if (!acpModeId) {
 					throw new AntigravityAcpError(
 						"protocol",
 						`Antigravity rolled-over session did not advertise permission mode '${mode}'; refusing to prompt`,
 					);
 				}
-				if (sessionModes(session)?.currentModeId !== mode) {
-					await binding.connection.setMode(session.sessionId, mode, signal);
+				if (sessionModes(session)?.currentModeId !== acpModeId) {
+					await binding.connection.setMode(session.sessionId, acpModeId, signal);
 				}
-				if (sessionModes(binding.connection.getSessionState(session.sessionId))?.currentModeId !== mode) {
+				if (sessionModes(binding.connection.getSessionState(session.sessionId))?.currentModeId !== acpModeId) {
 					throw new AntigravityAcpError("protocol", "Antigravity did not confirm the requested permission mode");
 				}
 				if (sessionModels(session)?.currentModelId !== acpModelId) {
@@ -869,6 +1017,7 @@ export class AntigravityRuntime {
 				}
 				binding.session = session;
 				binding.mode = mode;
+				binding.acpModeId = acpModeId;
 				binding.modelId = acpModelId;
 				binding.instructionsFingerprint = undefined;
 				binding.needsReconstruction = false;
@@ -908,7 +1057,11 @@ export class AntigravityRuntime {
 		for (let attempt = 0; ; attempt += 1) {
 			await this.modeChanges;
 			this.assertEpoch(epoch);
-			if (binding.mode !== this.permissionMode || this.confirmedMode(binding) !== this.permissionMode) {
+			if (
+				binding.mode !== this.permissionMode ||
+				binding.dangerSkipPermissions !== wantsDangerSkipPermissions(this.permissionMode) ||
+				this.confirmedMode(binding) !== binding.acpModeId
+			) {
 				await this.invalidateBinding(binding);
 				throw new AntigravityAcpError("protocol", "Permission mode changed before prompting; retry the turn");
 			}
@@ -1134,6 +1287,7 @@ export class AntigravityRuntime {
 	private async acquireConnection(
 		apiKey: string | undefined,
 		cwd: string,
+		dangerSkipPermissions: boolean,
 		handlers: AntigravityConnectionHandlers,
 		epoch: number,
 		signal?: AbortSignal,
@@ -1148,7 +1302,12 @@ export class AntigravityRuntime {
 			await this.standbyQueue.catch(() => undefined);
 			const entry = await pendingStandby.catch(() => undefined);
 			this.assertEpoch(epoch);
-			if (entry && entry.connection.process.alive && normalizeAuthKey(entry.apiKey) === normalizeAuthKey(apiKey)) {
+			if (
+				entry &&
+				entry.connection.process.alive &&
+				entry.dangerSkipPermissions === dangerSkipPermissions &&
+				normalizeAuthKey(entry.apiKey) === normalizeAuthKey(apiKey)
+			) {
 				entry.connection.setHandlers(handlers);
 				return {
 					connection: entry.connection,
@@ -1158,7 +1317,7 @@ export class AntigravityRuntime {
 			}
 			if (entry) await entry.connection.close().catch(() => undefined);
 		}
-		const connection = this.createConnection({ cwd, handlers });
+		const connection = this.createConnection({ cwd, dangerSkipPermissions, handlers });
 		try {
 			const initialize = await connection.initialize(signal);
 			this.assertEpoch(epoch);
@@ -1184,17 +1343,26 @@ export class AntigravityRuntime {
 		let binding: Binding | undefined;
 		let bridge: PiMcpBridge | undefined;
 		const epoch = this.bindingEpoch;
+		const dangerSkipPermissions = wantsDangerSkipPermissions(this.permissionMode);
 		const handlers: AntigravityConnectionHandlers = {
 			onUpdate: (notification) => this.consumeUpdate(binding, notification),
 			onPermission: (request) => this.requestPermission(binding, request),
 		};
-		const { connection, initialize, quotaSessionIds } = await this.acquireConnection(apiKey, cwd, handlers, epoch, signal);
+		const { connection, initialize, quotaSessionIds } = await this.acquireConnection(
+			apiKey,
+			cwd,
+			dangerSkipPermissions,
+			handlers,
+			epoch,
+			signal,
+		);
 		try {
-			const omittedTools = initialize.agentCapabilities?.mcpCapabilities?.http === true
+			const hasMcpHttp = supportsMcpHttp(initialize);
+			const omittedTools = hasMcpHttp
 				? planToolProjection(tools)
 				: tools.filter((tool) => tool.name !== PERMISSION_TOOL_NAME).map((tool) => ({ name: tool.name, reason: "Agent did not advertise MCP over HTTP" }));
 			let mcpServer;
-			if (tools.length > 0 && initialize.agentCapabilities?.mcpCapabilities?.http === true) {
+			if (tools.length > 0 && hasMcpHttp) {
 				bridge = new PiMcpBridge({
 					tools,
 					onCall: (invocation) => this.requestPiTool(binding, invocation),
@@ -1229,18 +1397,21 @@ export class AntigravityRuntime {
 			session ??= await connection.newSession(cwd, signal, mcpServers);
 			this.assertEpoch(epoch);
 			const mode = this.permissionMode;
-			if (!supportsMode(session, mode)) {
+			const acpModeId = resolveAcpSessionMode(session, mode);
+			if (!acpModeId) {
 				if (piSessionId) this.sessionStore?.remove(piSessionId);
 				throw new AntigravityAcpError("protocol", `Antigravity ${restored ? "restored" : "new"} session did not advertise permission mode '${mode}'; refusing to prompt`);
 			}
-			if (sessionModes(session)?.currentModeId !== mode) await connection.setMode(session.sessionId, mode, signal);
-			if (sessionModes(connection.getSessionState(session.sessionId))?.currentModeId !== mode) {
+			if (sessionModes(session)?.currentModeId !== acpModeId) await connection.setMode(session.sessionId, acpModeId, signal);
+			if (sessionModes(connection.getSessionState(session.sessionId))?.currentModeId !== acpModeId) {
 				throw new AntigravityAcpError("protocol", "Antigravity did not confirm the requested permission mode");
 			}
 			const currentModel = sessionModels(session)?.currentModelId;
 			if (currentModel !== acpModelId) await connection.setModel(session.sessionId, acpModelId, signal);
 			this.assertEpoch(epoch);
-			if (mode !== this.permissionMode) throw new AntigravityAcpError("protocol", "Permission mode changed during session setup; retry the turn");
+			if (mode !== this.permissionMode || dangerSkipPermissions !== wantsDangerSkipPermissions(this.permissionMode)) {
+				throw new AntigravityAcpError("protocol", "Permission mode changed during session setup; retry the turn");
+			}
 			const createdBinding: Binding = {
 				key,
 				cwd,
@@ -1248,6 +1419,8 @@ export class AntigravityRuntime {
 				initialize,
 				session,
 				mode,
+				acpModeId,
+				dangerSkipPermissions,
 				instructionsFingerprint: undefined,
 				needsReconstruction: false,
 				modelId: acpModelId,
@@ -1383,8 +1556,11 @@ export class AntigravityRuntime {
 			}
 		}
 		if (!binding || notification.sessionId !== binding.session.sessionId) return;
-		if ((notification.update.sessionUpdate === "config_option_update" || notification.update.sessionUpdate === "current_mode_update") &&
-			this.confirmedMode(binding) !== this.permissionMode) {
+		if (
+			(notification.update.sessionUpdate === "config_option_update" ||
+				notification.update.sessionUpdate === "current_mode_update") &&
+			this.confirmedMode(binding) !== binding.acpModeId
+		) {
 			binding.writer?.fail(new AntigravityAcpError("protocol", "Antigravity changed the permission mode unexpectedly; session closed"), false);
 			void this.invalidateBinding(binding).catch(() => undefined);
 			return;
@@ -1444,7 +1620,8 @@ export class AntigravityRuntime {
 
 	private createConnection(options: AntigravityConnectionOptions): AntigravityAcpConnection {
 		this.assertActive();
-		const connection = this.connectionFactory(options);
+		const dangerSkipPermissions = options.dangerSkipPermissions ?? wantsDangerSkipPermissions(this.permissionMode);
+		const connection = this.connectionFactory({ ...options, dangerSkipPermissions });
 		this.activeConnections.add(connection);
 		void connection.process.exited.then(() => this.activeConnections.delete(connection)).catch(() => undefined);
 		return connection;
@@ -1469,7 +1646,11 @@ async function authenticateForCredential(
 	if (!apiKey || apiKey === MANAGED_AUTH_MARKER) return;
 	const method = initialize.authMethods?.find((candidate) => {
 		const meta = candidate._meta as Record<string, unknown> | null | undefined;
-		return "api-key" in (meta ?? {}) || /api key/iu.test(candidate.name);
+		return (
+			"api-key" in (meta ?? {}) ||
+			candidate.id === "gemini-api-key" ||
+			/api key/iu.test(candidate.name)
+		);
 	});
 	if (!method) throw new AntigravityAcpError("auth", "Antigravity ACP did not advertise API-key authentication");
 	await connection.authenticate({ methodId: method.id, _meta: { "api-key": apiKey } }, signal);
@@ -1496,8 +1677,36 @@ function hasUsableLocalAuth(health: AntigravityAuthHealth): boolean {
 	return health.status === "api-key-env" || health.status === "oauth-refreshable";
 }
 
-function supportsMode(session: SessionState, mode: PermissionMode): boolean {
-	return sessionModes(session)?.availableModes.some((candidate) => candidate.id === mode) === true;
+function wantsDangerSkipPermissions(mode: PermissionMode): boolean {
+	return mode === "yolo";
+}
+
+function resolveAcpSessionMode(session: SessionState, mode: PermissionMode): string | undefined {
+	const available = sessionModes(session)?.availableModes;
+	if (!available?.length) return undefined;
+	const has = (id: string) => available.some((candidate) => candidate.id === id);
+	if (mode === "accept-edits") {
+		return has("accept-edits") ? "accept-edits" : has("auto_edit") ? "auto_edit" : undefined;
+	}
+	if (mode === "yolo") {
+		return has("yolo")
+			? "yolo"
+			: has("auto")
+				? "auto"
+				: has("accept-edits")
+					? "accept-edits"
+					: has("auto_edit")
+						? "auto_edit"
+						: has("default")
+							? "default"
+							: undefined;
+	}
+	return has(mode) ? mode : undefined;
+}
+
+function supportsMcpHttp(initialize: InitializeResponse): boolean {
+	const http = initialize.agentCapabilities?.mcpCapabilities?.http;
+	return typeof http === "boolean" ? http : initialize.agentInfo?.name === "Antigravity ACP Server";
 }
 
 function permissionView(permission: PendingPermission): PermissionView {

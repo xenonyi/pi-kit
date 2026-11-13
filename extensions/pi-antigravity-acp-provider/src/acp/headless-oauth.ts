@@ -37,12 +37,17 @@ export class HeadlessOAuthRelay {
 		const executable = path.join(this.directory, "xdg-open");
 		fs.copyFileSync(browser, executable);
 		fs.chmodSync(executable, 0o700);
-		this.env = {
+		const env: NodeJS.ProcessEnv = {
 			...baseEnv,
 			BROWSER: browser,
 			[CAPTURE_ENV]: this.captureFile,
 			PATH: `${this.directory}${path.delimiter}${baseEnv.PATH ?? ""}`,
 		};
+		delete env.SSH_CONNECTION;
+		delete env.SSH_CLIENT;
+		delete env.SSH_TTY;
+		if (!env.DISPLAY && !env.WAYLAND_DISPLAY) env.DISPLAY = ":0";
+		this.env = env;
 	}
 
 	async waitForAuthorization(signal?: AbortSignal): Promise<CapturedOAuthAuthorization> {
@@ -119,7 +124,7 @@ function parseAuthorization(text: string): CapturedOAuthAuthorization {
 	if (
 		url.protocol !== "https:" ||
 		url.hostname !== "accounts.google.com" ||
-		url.pathname !== "/o/oauth2/v2/auth"
+		(url.pathname !== "/o/oauth2/auth" && url.pathname !== "/o/oauth2/v2/auth")
 	) {
 		throw new Error("Antigravity produced an unexpected OAuth authorization URL");
 	}

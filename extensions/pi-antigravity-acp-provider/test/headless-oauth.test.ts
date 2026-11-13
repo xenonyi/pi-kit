@@ -110,10 +110,33 @@ describe.skipIf(process.platform === "win32")("headless OAuth relay", () => {
 			await close(server);
 		}
 	});
+	it("strips SSH variables, sets a synthetic DISPLAY, and accepts /o/oauth2/auth", async () => {
+		const relay = new HeadlessOAuthRelay({
+			PATH: process.env.PATH,
+			SSH_CONNECTION: "1.2.3.4 22 5.6.7.8 22",
+			SSH_CLIENT: "1.2.3.4 1 2",
+			SSH_TTY: "/dev/pts/0",
+		});
+		const browser = relay.env.BROWSER;
+		if (!browser) throw new Error("missing captured browser command");
+		try {
+			expect(relay.env.SSH_CONNECTION).toBeUndefined();
+			expect(relay.env.SSH_CLIENT).toBeUndefined();
+			expect(relay.env.SSH_TTY).toBeUndefined();
+			expect(relay.env.DISPLAY).toBe(":0");
+
+			const authUrl = authorization("http://127.0.0.1:4321/", "state-v1", "/o/oauth2/auth");
+			await run(browser, [authUrl], relay.env);
+			const captured = await relay.waitForAuthorization();
+			expect(captured.url).toBe(authUrl);
+		} finally {
+			relay.dispose();
+		}
+	});
 });
 
-function authorization(redirect: string, state: string): string {
-	const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+function authorization(redirect: string, state: string, pathname = "/o/oauth2/v2/auth"): string {
+	const url = new URL(`https://accounts.google.com${pathname}`);
 	url.searchParams.set("client_id", "test-client");
 	url.searchParams.set("redirect_uri", redirect);
 	url.searchParams.set("state", state);

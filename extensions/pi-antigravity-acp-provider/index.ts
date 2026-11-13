@@ -9,18 +9,16 @@ import { describeCredentialStorage } from "./src/acp/credential-storage.js";
 import { errorMessage } from "./src/acp/errors.js";
 import { resolveAntigravityAcpEntry } from "./src/acp/process.js";
 import {
-	checkAntigravityAcpUpdate,
 	inspectRuntimeSetup,
 	updateAntigravityAcpRuntime,
 } from "./src/acp/setup.js";
 import {
-	isPermissionMode,
 	isRuntimeUpdateMode,
 	loadConfig,
+	normalizePermissionMode,
 	permissionModeLabel,
 	savePermissionMode,
 	saveRuntimeUpdateMode,
-	type PermissionMode,
 } from "./src/config.js";
 import {
 	ACP_PROTOCOL_VERSION,
@@ -122,8 +120,8 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 				const result = await updateAntigravityAcpRuntime((message) => ctx.ui.notify(message, "info"));
 				ctx.ui.notify(
 					result.changed
-						? `Installed verified Antigravity ACP ${result.version}. Restart Pi to move active sessions to it.`
-						: `Antigravity ACP ${result.version} is already the latest signed release.`,
+						? `Updated Antigravity CLI to ${result.version ?? "latest"} (${result.binary}). Restart Pi to move active sessions to it.`
+						: `Antigravity CLI ${result.version ?? "latest"} (${result.binary}) is already up to date.`,
 					"info",
 				);
 				return;
@@ -166,25 +164,27 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 				return;
 			}
 			if (command === "permissions" || command.startsWith("permissions ")) {
-				let requested = command.slice("permissions".length).trim().replaceAll("-", "_");
-				if (!requested) {
+				const raw = command.slice("permissions".length).trim();
+				let mode = raw ? normalizePermissionMode(raw) : undefined;
+				if (!raw) {
 					const choices = [
 						"yolo — allow commands and edits automatically (default)",
-						"auto-edit — allow edits automatically; commands may ask",
+						"auto — allow safe actions automatically",
+						"accept-edits — allow edits automatically; commands may ask",
 						"default — ask before sensitive operations",
+						"plan — read-only planning mode",
 					];
 					const selected = await ctx.ui.select("Antigravity permission mode", choices);
 					if (!selected) return;
-					requested = selected.split(" ", 1)[0]!.replaceAll("-", "_");
+					mode = normalizePermissionMode(selected.split(" ", 1)[0]);
 				}
-				if (!isPermissionMode(requested)) {
+				if (!mode) {
 					ctx.ui.notify(
-						"Usage: /antigravity-acp permissions [default|auto-edit|yolo]",
+						"Usage: /antigravity-acp permissions [default|accept-edits|auto|plan|yolo]",
 						"warning",
 					);
 					return;
 				}
-				const mode: PermissionMode = requested;
 				await runtime.setPermissionMode(mode);
 				savePermissionMode(mode);
 				ctx.ui.notify(
@@ -212,11 +212,10 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 			const snapshot = await runtime.snapshot(verbose);
 			const auth = inspectAntigravityAuth();
 			const setup = inspectRuntimeSetup();
-			const update = await checkAntigravityAcpUpdate().catch(() => undefined);
 			ctx.ui.notify(
 				[
 					`Antigravity ACP provider ${PACKAGE_VERSION}`,
-					`Runtime: installed=${setup.installedVersion ?? "external/unknown"} approved=${update?.approvedVersion ?? setup.approvedVersion} registry=${update?.latestVersion ?? "unavailable"} updates=${setup.updateMode}; ACP SDK ${ACP_SDK_VERSION}, protocol ${ACP_PROTOCOL_VERSION}`,
+					`Runtime: installed=${setup.installedVersion ?? "external/unknown"} source=${setup.launch?.source ?? "missing"} updates=${setup.updateMode}; ACP SDK ${ACP_SDK_VERSION}, protocol ${ACP_PROTOCOL_VERSION}`,
 					`Antigravity server: ${entry}`,
 					`Authentication: ${auth.status}${auth.authType ? ` (${auth.authType})` : ""}`,
 					`Credential storage (preflight): ${describeCredentialStorage()}`,
@@ -239,29 +238,10 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 		description: "Deprecated alias for /antigravity-acp",
 	});
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async () => {
 		if (hasAntigravityAuth()) {
 			const apiKey = process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY : undefined;
 			void runtime.prewarm(apiKey).catch(() => undefined);
-		}
-		if (loadConfig().runtimeUpdates !== "notify") return;
-		try {
-			const update = await checkAntigravityAcpUpdate();
-			if (update.approvalPending) {
-				ctx.ui.notify(
-					`Antigravity ACP ${update.latestVersion} is published but is still awaiting a signed runtime manifest.`,
-					"warning",
-				);
-			} else if (update.updateAvailable) {
-				ctx.ui.notify(
-					update.managed
-						? `Antigravity ACP ${update.approvedVersion} is available. Run /antigravity-acp update.`
-						: `Antigravity ACP ${update.approvedVersion} is available, but the selected external runtime must be updated manually.`,
-					"info",
-				);
-			}
-		} catch {
-			// Update checks are advisory and must not interrupt Pi startup.
 		}
 	});
 

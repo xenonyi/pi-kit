@@ -282,7 +282,7 @@ describe("prewarm, single-pipeline quota reuse & synthetic progress", () => {
 		expect(quota.groups.length).toBeGreaterThan(0);
 		expect(connections).toHaveLength(1);
 
-		const conversationsDir = path.join(geminiHome, "antigravity-acp", "conversations");
+		const conversationsDir = path.join(geminiHome, "antigravity-cli", "conversations");
 		const files = fs.readdirSync(conversationsDir);
 		const dbFiles = files.filter((file) => file.endsWith(".db"));
 		expect(dbFiles).toHaveLength(1);
@@ -306,34 +306,27 @@ describe("prewarm, single-pipeline quota reuse & synthetic progress", () => {
 	});
 });
 
-describe("managed runtime pre-launch permission repair", () => {
-	it("repairs lost +x permissions under ~/.local/opt/agy-acp/current before resolution", async () => {
+describe("native agy binary pre-launch resolution", () => {
+	it("resolves executable agy under ~/.local/bin before launching", async () => {
 		if (process.platform === "win32") return;
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-perm-repair-"));
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-agy-launch-"));
 		tempRoots.push(root);
 		const fakeHome = path.join(root, "home");
-		const scopedGemini = path.join(root, "gemini");
-		const currentDir = path.join(fakeHome, ".local", "opt", "agy-acp", "current");
-		fs.mkdirSync(currentDir, { recursive: true });
-		const serverBin = path.join(currentDir, "agy_acp_server.par");
-		const helperBin = path.join(currentDir, "localharness_external");
-		fs.writeFileSync(serverBin, "#!/bin/sh\necho ok\n", { mode: 0o644 });
-		fs.writeFileSync(helperBin, "#!/bin/sh\necho ok\n", { mode: 0o644 });
+		const localBin = path.join(fakeHome, ".local", "bin");
+		fs.mkdirSync(localBin, { recursive: true });
+		const agyBin = path.join(localBin, "agy");
+		fs.writeFileSync(agyBin, "#!/bin/sh\necho ok\n", { mode: 0o755 });
 
 		vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
 		vi.stubEnv("HOME", fakeHome);
-		vi.stubEnv("GEMINI_HOME", scopedGemini);
 		vi.stubEnv("AGY_ACP_BIN", "");
-		vi.stubEnv("AGY_ACP_NO_UPDATE", "1");
-		vi.stubGlobal(
-			"fetch",
-			vi.fn().mockRejectedValue(new AntigravityAcpError("protocol", "network disabled in test")),
-		);
 
 		await ensureAntigravityAcpReady();
-		const ready = resolveAntigravityAcpLaunch();
-		expect(ready.command).toBe(serverBin);
-		expect(fs.statSync(serverBin).mode & 0o111).not.toBe(0);
-		expect(fs.statSync(helperBin).mode & 0o111).not.toBe(0);
+		const ready = resolveAntigravityAcpLaunch({ dangerSkipPermissions: true });
+		expect(ready).toEqual({
+			command: agyBin,
+			args: ["acp", "--dangerously-skip-permissions"],
+			source: "user-bin",
+		});
 	});
 });

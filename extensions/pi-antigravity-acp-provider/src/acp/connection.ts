@@ -167,6 +167,15 @@ export class AntigravityAcpConnection {
 		);
 	}
 
+	async logout(signal?: AbortSignal): Promise<void> {
+		const initialized = await this.initialize(signal);
+		if (!initialized.agentCapabilities?.auth?.logout) return;
+		await this.withAbort(
+			this.withDeadline(this.connection.agent.request(methods.agent.logout, {}), this.operationTimeoutMs, "logout"),
+			signal,
+		);
+	}
+
 	async newSession(
 		cwd: string,
 		signal?: AbortSignal,

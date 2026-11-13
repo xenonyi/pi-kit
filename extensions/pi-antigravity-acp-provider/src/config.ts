@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export type PermissionMode = "default" | "auto_edit" | "yolo";
+export type PermissionMode = "default" | "accept-edits" | "auto" | "plan" | "yolo";
 export type RuntimeUpdateMode = "automatic" | "notify" | "manual";
 
 export interface AntigravityAcpConfig {
@@ -49,7 +49,7 @@ export function loadConfig(file = resolveConfigPath()): AntigravityAcpConfig {
 			runtimeUpdates?: unknown;
 		};
 		return {
-			permissions: isPermissionMode(parsed.permissions) ? parsed.permissions : "yolo",
+			permissions: normalizePermissionMode(parsed.permissions) ?? "yolo",
 			runtimeUpdates: isRuntimeUpdateMode(parsed.runtimeUpdates) ? parsed.runtimeUpdates : "automatic",
 		};
 	} catch {
@@ -100,8 +100,20 @@ function copyConfig(source: string, destination: string): void {
 	}
 }
 
+export function normalizePermissionMode(value: unknown): PermissionMode | undefined {
+	if (value === "auto_edit" || value === "auto-edit") return "accept-edits";
+	if (isPermissionMode(value)) return value;
+	return undefined;
+}
+
 export function isPermissionMode(value: unknown): value is PermissionMode {
-	return value === "default" || value === "auto_edit" || value === "yolo";
+	return (
+		value === "default" ||
+		value === "accept-edits" ||
+		value === "auto" ||
+		value === "plan" ||
+		value === "yolo"
+	);
 }
 
 export function isRuntimeUpdateMode(value: unknown): value is RuntimeUpdateMode {
@@ -109,6 +121,5 @@ export function isRuntimeUpdateMode(value: unknown): value is RuntimeUpdateMode 
 }
 
 export function permissionModeLabel(mode: PermissionMode): string {
-	if (mode === "auto_edit") return "auto-edit";
 	return mode;
 }

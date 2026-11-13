@@ -4,7 +4,7 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { resolveAntigravityAcpLaunch } from "./antigravity.js";
+import { resolveAntigravityAcpDirectory, resolveAntigravityAcpLaunch, type AntigravityLaunch } from "./antigravity.js";
 import { redact } from "./errors.js";
 import { applyAcpProxyEnvironment } from "./proxy.js";
 import { applyCredentialStorageEnvironment, type CredentialStorageOptions } from "./credential-storage.js";
@@ -19,6 +19,7 @@ export interface AntigravityProcessOptions {
 	command?: string;
 	args?: string[];
 	env?: NodeJS.ProcessEnv;
+	dangerSkipPermissions?: boolean;
 	/** Overrides the credential-storage resolution seams (keychain probe and
 	 * token path) in tests; production callers leave this unset. */
 	credentialStorage?: Omit<CredentialStorageOptions, "env">;
@@ -35,8 +36,6 @@ export function resolveSupervisorEntry(): string {
 }
 
 export function resolveAntigravityAcpEntry(): string {
-	// Kept as a compatibility export for diagnostics; the provider now targets
-	// Google Antigravity's ACP server rather than the retired Gemini CLI client.
 	return resolveAntigravityAcpLaunch().command;
 }
 
@@ -74,19 +73,6 @@ function isExecutableFile(filePath: string): boolean {
 		return fs.statSync(filePath).isFile();
 	} catch {
 		return false;
-	}
-}
-
-function ensureExecutableBit(filePath: string): void {
-	if (process.platform === "win32") return;
-	try {
-		const stat = fs.lstatSync(filePath);
-		if (!stat.isFile()) return;
-		const permissions = stat.mode & 0o777;
-		const executablePermissions = permissions | ((permissions & 0o444) >> 2);
-		if (permissions !== executablePermissions) fs.chmodSync(filePath, executablePermissions);
-	} catch {
-		// Best-effort pre-spawn guard; missing files surface via launch resolution.
 	}
 }
 
@@ -150,10 +136,23 @@ export class AntigravityProcess {
 			args = options.args ?? [];
 		} else {
 			const nodeBinary = resolveNodeBinary(options.env?.NODE, options.env ?? process.env);
-			const launch = options.entryPath
-				? { command: nodeBinary, args: [options.entryPath, ...(options.args ?? [])], source: "env" as const }
-				: resolveAntigravityAcpLaunch();
-			if (launch.source === "managed") ensureExecutableBit(path.join(path.dirname(launch.command), "localharness_external"));
+			let launch: AntigravityLaunch;
+			if (options.entryPath) {
+				launch = { command: nodeBinary, args: [options.entryPath, ...(options.args ?? [])], source: "env" };
+			} else {
+				launch = resolveAntigravityAcpLaunch({
+					...(options.dangerSkipPermissions === undefined
+						? {}
+						: { dangerSkipPermissions: options.dangerSkipPermissions }),
+				});
+				const geminiHome = options.env?.GEMINI_HOME?.trim();
+				if (geminiHome && launch.args[0] === "acp") {
+					launch = {
+						...launch,
+						args: [...launch.args, "--gemini-dir", path.dirname(resolveAntigravityAcpDirectory(options.env))],
+					};
+				}
+			}
 			command = nodeBinary;
 			args = [resolveSupervisorEntry(), "--command", launch.command, ...launch.args];
 		}

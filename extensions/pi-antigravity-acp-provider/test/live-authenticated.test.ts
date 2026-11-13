@@ -26,7 +26,7 @@ describe.skipIf(!enabled)("authenticated Google Antigravity ACP server", () => {
 		});
 		try {
 			const initialize = await connection.initialize();
-			expect(initialize.agentInfo?.name).toBe("antigravity-acp");
+			expect(initialize.agentInfo?.name).toBe("Antigravity ACP Server");
 			const session = await connection.newSession(process.cwd());
 			expect(session.sessionId).toBeTruthy();
 			const response = await connection.prompt({

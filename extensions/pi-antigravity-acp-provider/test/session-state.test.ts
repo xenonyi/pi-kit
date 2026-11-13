@@ -152,6 +152,49 @@ describe("ACP session compatibility", () => {
 		expect(splitSessionModelId(state, "gemini-a-off")).toBeUndefined();
 	});
 
+	it("preserves authoritative per-model availableModels (including xhigh) and splits via suffix fallback", () => {
+		const availableModels = [
+			{ modelId: "gemini-4-hydrogen-low", name: "Gemini 4 Hydrogen (Low)" },
+			{ modelId: "gemini-4-hydrogen-high", name: "Gemini 4 Hydrogen (High)" },
+			{ modelId: "gemini-4-hydrogen-xhigh", name: "Gemini 4 Hydrogen (xHigh)" },
+			{ modelId: "gemini-pro-orchestrator-g1-pro", name: "Gemini Pro Orchestrator" },
+		];
+		const state = decodeSessionState({
+			models: { currentModelId: "gemini-4-hydrogen-high", availableModels },
+			configOptions: [
+				{
+					id: "model",
+					name: "Model",
+					category: "model",
+					type: "select",
+					currentValue: "gemini-4-hydrogen",
+					options: [
+						{ value: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen" },
+						{ value: "gemini-pro-orchestrator-g1-pro", name: "Gemini Pro Orchestrator" },
+					],
+				},
+				{
+					id: "thought_level",
+					name: "Thinking Level",
+					category: "thought_level",
+					type: "select",
+					currentValue: "high",
+					options: [
+						{ value: "low", name: "Low" },
+						{ value: "medium", name: "Medium" },
+						{ value: "high", name: "High" },
+					],
+				},
+			],
+		});
+		expect(sessionModels(state)?.availableModels).toEqual(availableModels);
+		expect(splitSessionModelId(state, "gemini-4-hydrogen-xhigh")).toEqual({
+			base: "gemini-4-hydrogen",
+			effort: "xhigh",
+		});
+		expect(splitSessionModelId(state, "gemini-pro-orchestrator-g1-pro")).toBeUndefined();
+	});
+
 	it.each([
 		null,
 		{ models: { currentModelId: "bad", availableModels: [{ modelId: 123, name: "Bad" }] } },

@@ -3,7 +3,11 @@ import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { inspectAntigravityAuth } from "./acp/antigravity.js";
 import { ensureAntigravityAcpReady, inspectRuntimeSetup } from "./acp/setup.js";
 import { MANAGED_AUTH_MARKER } from "./constants.js";
-import { savePermissionMode, type PermissionMode } from "./config.js";
+import {
+	normalizePermissionMode,
+	permissionModeLabel,
+	savePermissionMode,
+} from "./config.js";
 import type { AntigravityRuntime } from "./runtime.js";
 
 export async function runSetupWizard(
@@ -21,7 +25,7 @@ export async function runSetupWizard(
 		);
 		if (!loginNow) {
 			ui.notify(
-				`Runtime ${setup.installedVersion ?? setup.approvedVersion} ready at ${setup.launch?.command ?? "unknown path"}. Run /login and choose Google Antigravity (ACP) when ready.`,
+				`Runtime ${setup.installedVersion ?? "unknown"} ready at ${setup.launch?.command ?? "unknown path"}. Run /login and choose Google Antigravity (ACP) when ready.`,
 				"warning",
 			);
 			return;
@@ -47,15 +51,17 @@ export async function runSetupWizard(
 
 	const selectedMode = await ui.select("Default Antigravity permission mode", [
 		"yolo — run commands and edits without confirmation",
-		"auto-edit — allow edits; ask for commands",
+		"auto — allow safe actions automatically",
+		"accept-edits — allow edits; ask for commands",
 		"default — ask before sensitive operations",
+		"plan — read-only planning mode",
 	]);
 	if (selectedMode) {
-		const mode = selectedMode.startsWith("auto-edit")
-			? "auto_edit"
-			: (selectedMode.split(" ", 1)[0] as PermissionMode);
-		await runtime.setPermissionMode(mode);
-		savePermissionMode(mode);
+		const mode = normalizePermissionMode(selectedMode.split(" ", 1)[0]);
+		if (mode) {
+			await runtime.setPermissionMode(mode);
+			savePermissionMode(mode);
+		}
 	}
 
 	ui.notify("Validating authentication and discovering models…", "info");
@@ -73,10 +79,10 @@ export async function runSetupWizard(
 	ui.notify(
 		[
 			"Antigravity ACP setup complete.",
-			`Runtime: ${setup.installedVersion ?? setup.approvedVersion} (${setup.platform})`,
+			`Runtime: ${setup.installedVersion ?? "unknown"} (${setup.platform})`,
 			`Authentication: valid ${localAuth.authType ?? localAuth.status}`,
 			`Models discovered: ${models.length}`,
-			`Permission mode: ${runtimeStatus.permissionMode.replace("_", "-")}.`,
+			`Permission mode: ${permissionModeLabel(runtimeStatus.permissionMode)}.`,
 		].join("\n"),
 		"info",
 	);

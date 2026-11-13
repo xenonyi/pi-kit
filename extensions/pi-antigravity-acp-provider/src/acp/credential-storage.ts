@@ -67,7 +67,7 @@ export function resolveCredentialStorageDecision(
 	const platform = options.platform ?? process.platform;
 	if (platform !== "darwin") return { env: {}, reason: "not-darwin" };
 
-	const tokenPath = options.tokenPath ?? path.join(resolveAntigravityAcpDirectory(env), "acp_token.json");
+	const tokenPath = options.tokenPath ?? path.join(resolveAntigravityAcpDirectory(env), "antigravity-oauth-token");
 	if (inspectAntigravityAuth(path.dirname(tokenPath), env).status !== "oauth-refreshable") {
 		return { env: {}, reason: "no-refreshable-token-file" };
 	}

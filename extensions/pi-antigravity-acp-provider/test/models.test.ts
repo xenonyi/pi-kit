@@ -9,7 +9,7 @@ describe("projectModels", () => {
 		expect(FALLBACK_MODELS.some((model) => model.id === "gemini-4-argon")).toBe(true);
 	});
 
-	it.each(["low", "medium", "high"])("splits a known %s suffix without truncating the base", (effort) => {
+	it.each(["low", "medium", "high", "xhigh"])("splits a known %s suffix without truncating the base", (effort) => {
 		expect(splitEffortSuffix(`gemini-hyphenated-base-${effort}`)).toEqual({ base: "gemini-hyphenated-base", effort });
 	});
 
@@ -17,35 +17,47 @@ describe("projectModels", () => {
 		expect(splitEffortSuffix(id)).toBeUndefined();
 	});
 
-	it("deduplicates and rejects unsafe ids", () => {
+	it("deduplicates and rejects unsafe ids while preserving non-Gemini models", () => {
 		const models = projectModels([
 			{ modelId: "gemini-a", name: "Gemini A" },
 			{ modelId: "gemini-a", name: "duplicate" },
+			{ modelId: "claude-opus-5-5", name: "Claude Opus 5.5" },
+			{ modelId: "gpt-oss-120b-medium", name: "GPT OSS 120B (Medium)" },
+			{ modelId: "gemini-pro-orchestrator-g1-pro", name: "Gemini Pro Orchestrator" },
 			{ modelId: "bad\nmodel", name: "bad" },
 		]);
-		expect(models.map((model) => model.id)).toEqual(["gemini-a"]);
+		expect(models.map((model) => model.id)).toEqual([
+			"gemini-a",
+			"claude-opus-5-5",
+			"gpt-oss-120b-medium",
+			"gemini-pro-orchestrator-g1-pro",
+		]);
 		expect(models[0]?.cost.input).toBe(0);
 	});
 
-	it("collapses ACP effort variants into Pi reasoning levels", () => {
+	it("collapses ACP effort variants into Pi reasoning levels including xhigh", () => {
 		const models = projectModels([
-			{ modelId: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash (High)" },
-			{ modelId: "gemini-3.8-flash-medium", name: "Gemini 3.8 Flash (Medium)" },
-			{ modelId: "gemini-3.8-flash-low", name: "Gemini 3.8 Flash (Low)" },
+			{ modelId: "gemini-4-hydrogen-xhigh", name: "Gemini 4 Hydrogen (xHigh)" },
+			{ modelId: "gemini-4-hydrogen-high", name: "Gemini 4 Hydrogen (High)" },
+			{ modelId: "gemini-4-hydrogen-medium", name: "Gemini 4 Hydrogen (Medium)" },
+			{ modelId: "gemini-4-hydrogen-low", name: "Gemini 4 Hydrogen (Low)" },
 			{ modelId: "gemini-pro-agent", name: "Gemini 3.1 Pro (High)" },
 			{ modelId: "gemini-3.1-pro-low", name: "Gemini 3.1 Pro (Low)" },
 		]);
 
-		expect(models.map((model) => model.id)).toEqual(["gemini-3.8-flash", "gemini-3.1-pro"]);
+		expect(models.map((model) => model.id)).toEqual(["gemini-4-hydrogen", "gemini-3.1-pro"]);
 		expect(models[0]?.thinkingLevelMap?.off).toBeNull();
-		expect(models[0]?.thinkingLevelMap?.medium).toBe("gemini-3.8-flash-medium");
-		expect(resolveAcpModelId(models[0]!, "low")).toBe("gemini-3.8-flash-low");
-		expect(resolveAcpModelId(models[0]!, "high")).toBe("gemini-3.8-flash-high");
+		expect(models[0]?.thinkingLevelMap?.xhigh).toBe("gemini-4-hydrogen-xhigh");
+		expect(models[0]?.thinkingLevelMap?.max).toBeNull();
+		expect(resolveAcpModelId(models[0]!, "low")).toBe("gemini-4-hydrogen-low");
+		expect(resolveAcpModelId(models[0]!, "high")).toBe("gemini-4-hydrogen-high");
+		expect(resolveAcpModelId(models[0]!, "xhigh")).toBe("gemini-4-hydrogen-xhigh");
+		expect(resolveAcpModelId(models[0]!, "max")).toBe("gemini-4-hydrogen-xhigh");
 		expect(models[1]?.thinkingLevelMap?.medium).toBeNull();
 		expect(resolveAcpModelId(models[1]!, "medium")).toBe("gemini-pro-agent");
 	});
 
-	it.each(["low", "medium", "high"] as const)("retains the only advertised %s reasoning tier without inventing variants", (effort) => {
+	it.each(["low", "medium", "high", "xhigh"] as const)("retains the only advertised %s reasoning tier without inventing variants", (effort) => {
 		const id = `gemini-4-argon-${effort}`;
 		const models = projectModels([{ modelId: id, name: `Gemini 4 Argon (${effort})` }]);
 		expect(models).toHaveLength(1);

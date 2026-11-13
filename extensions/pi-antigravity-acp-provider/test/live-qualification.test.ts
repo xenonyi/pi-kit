@@ -13,11 +13,11 @@ function connection(overrides: Partial<ConstructorParameters<typeof AntigravityA
 
 describe.skipIf(!enabled)("live Antigravity ACP qualification", () => {
 	it("switches model effort and remains usable after cancellation", async () => {
-		const acp = connection();
+		const acp = connection({ dangerSkipPermissions: true });
 		try {
 			await acp.initialize();
 			const session = await acp.newSession(process.cwd());
-			await acp.setMode(session.sessionId, "yolo");
+			await acp.setMode(session.sessionId, "auto");
 			await acp.setModel(session.sessionId, "gemini-3.8-flash-low");
 			const controller = new AbortController();
 			const pending = acp.prompt(
@@ -42,13 +42,13 @@ describe.skipIf(!enabled)("live Antigravity ACP qualification", () => {
 
 	it("restores an ACP session after the server process restarts", async () => {
 		let sessionId: string;
-		const first = connection();
+		const first = connection({ dangerSkipPermissions: true });
 		try {
 			const initialize = await first.initialize();
 			expect(initialize.agentCapabilities?.sessionCapabilities?.resume).toBeDefined();
 			const session = await first.newSession(process.cwd());
 			sessionId = session.sessionId;
-			await first.setMode(sessionId, "yolo");
+			await first.setMode(sessionId, "auto");
 			await first.prompt({
 				sessionId,
 				prompt: [{ type: "text", text: "Remember this exact private test marker: RESTORE_LIVE_48291. Reply only SAVED." }],
@@ -59,6 +59,7 @@ describe.skipIf(!enabled)("live Antigravity ACP qualification", () => {
 
 		const updates: string[] = [];
 		const second = connection({
+			dangerSkipPermissions: true,
 			handlers: {
 				onUpdate: (notification) => {
 					const update = notification.update;
@@ -99,11 +100,11 @@ describe.skipIf(!enabled)("live Antigravity ACP qualification", () => {
 		});
 		const server = await bridge.start();
 		expect(server).toBeDefined();
-		const acp = connection();
+		const acp = connection({ dangerSkipPermissions: true });
 		try {
 			await acp.initialize();
 			const session = await acp.newSession(process.cwd(), undefined, [server!]);
-			await acp.setMode(session.sessionId, "yolo");
+			await acp.setMode(session.sessionId, "auto");
 			await acp.setModel(session.sessionId, "gemini-3.8-flash-low");
 			const response = await acp.prompt({
 				sessionId: session.sessionId,

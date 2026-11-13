@@ -9,7 +9,6 @@ import { z } from "zod";
 import { splitEffortSuffix } from "../models.js";
 import { AntigravityAcpError } from "./errors.js";
 
-/** Antigravity's pre-config-option model metadata remains on older ACP v1 servers. */
 export interface AcpModelInfo {
 	modelId: string;
 	name: string;
@@ -37,13 +36,9 @@ const stateSchema = z.object({
 	models: z.object({ currentModelId: z.string(), availableModels: z.array(z.object({ modelId: z.string(), name: z.string() })) }).nullish(),
 });
 
-/** Validate the state we use explicitly, preserving Antigravity's legacy model
- * metadata even when it is absent from the SDK's generated response types. */
 export function decodeSessionState(response: unknown): SessionState {
 	const parsed = stateSchema.safeParse(response);
 	if (!parsed.success) throw new AntigravityAcpError("protocol", "Invalid ACP session configuration");
-	// JSON responses cannot contain explicit undefined properties; Zod's optional
-	// property inference is broader than the SDK's exact-optional declarations.
 	return parsed.data as SessionState;
 }
 
@@ -62,8 +57,6 @@ export function selectorValues(option: SelectOption): SessionConfigSelectOption[
 	return option.options.flatMap((entry) => "options" in entry ? entry.options : [entry]);
 }
 
-/** Reverse the selector cross-product used by discovery, including unknown
- * thought levels, without misinterpreting an exact native model ID. */
 export function splitSessionModelId(state: SessionState, modelId: string): { base: string; effort: string } | undefined {
 	const model = findSessionSelector(state, "model");
 	const thought = findSessionSelector(state, "thought_level");
@@ -74,6 +67,10 @@ export function splitSessionModelId(state: SessionState, modelId: string): { bas
 	for (const base of models) {
 		const level = levels.find((option) => `${base.value}-${option.value}` === modelId);
 		if (level) return { base: base.value, effort: level.value };
+	}
+	const effortSplit = splitEffortSuffix(modelId);
+	if (effortSplit && models.some((option) => option.value === effortSplit.base)) {
+		return effortSplit;
 	}
 	return undefined;
 }
@@ -92,8 +89,6 @@ export function sessionModels(state: SessionState): { currentModelId: string; av
 				qualified(selector.currentValue) || !thoughtSelector.currentValue
 					? selector.currentValue
 					: `${selector.currentValue}-${thoughtSelector.currentValue}`;
-			// Live selectors are authoritative; retain legacy labels only for the
-			// same complete, duplicate-free inventory.
 			const synthesized = modelOptions.flatMap((modelOpt) =>
 				qualified(modelOpt.value)
 					? [{ modelId: modelOpt.value, name: modelOpt.name }]
@@ -103,17 +98,19 @@ export function sessionModels(state: SessionState): { currentModelId: string; av
 						})),
 			);
 			const synthesizedIds = new Set(synthesized.map((m) => m.modelId));
-
 			const legacy = state.models?.availableModels;
-			const isLegacyCompatible =
+			const isExactLegacy =
 				legacy !== undefined &&
 				legacy.length === synthesizedIds.size &&
 				new Set(legacy.map((model) => model.modelId)).size === synthesizedIds.size &&
 				legacy.every((m) => synthesizedIds.has(m.modelId));
+			const isAuthoritativeInventory =
+				isExactLegacy ||
+				isConsistentLegacyInventory(legacy, modelOptions, thoughtOptions);
 
 			return {
 				currentModelId,
-				availableModels: isLegacyCompatible ? legacy : synthesized,
+				availableModels: isAuthoritativeInventory ? legacy! : synthesized,
 			};
 		}
 	}
@@ -121,6 +118,28 @@ export function sessionModels(state: SessionState): { currentModelId: string; av
 		currentModelId: selector.currentValue,
 		availableModels: modelOptions.map((option) => ({ modelId: option.value, name: option.name })),
 	};
+}
+
+function isConsistentLegacyInventory(
+	legacy: AcpModelInfo[] | undefined,
+	modelOptions: SessionConfigSelectOption[],
+	thoughtOptions: SessionConfigSelectOption[],
+): boolean {
+	if (!legacy || legacy.length <= modelOptions.length) return false;
+	const ids = legacy.map((entry) => entry.modelId);
+	if (new Set(ids).size !== ids.length) return false;
+	const thoughtSet = new Set(thoughtOptions.map((option) => option.value));
+	const baseValues = modelOptions.map((option) => option.value);
+	const matchesBase = (modelId: string, base: string): boolean => {
+		if (modelId === base) return true;
+		if (!modelId.startsWith(`${base}-`)) return false;
+		const suffix = modelId.slice(base.length + 1);
+		return thoughtSet.has(suffix) || splitEffortSuffix(modelId)?.base === base;
+	};
+	return (
+		ids.every((modelId) => baseValues.some((base) => matchesBase(modelId, base))) &&
+		baseValues.every((base) => ids.some((modelId) => matchesBase(modelId, base)))
+	);
 }
 
 export function sessionModes(state: SessionState): SessionModeState | null | undefined {
@@ -131,4 +150,3 @@ export function sessionModes(state: SessionState): SessionModeState | null | und
 		availableModes: selectorValues(selector).map((option) => ({ id: option.value, name: option.name })),
 	};
 }
-

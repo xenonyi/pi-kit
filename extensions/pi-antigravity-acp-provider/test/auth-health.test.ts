@@ -28,30 +28,55 @@ describe("Antigravity auth health", () => {
 		expect(inspectAntigravityAuth(directory).status).toBe("configured-not-authenticated");
 	});
 
-	it("recognizes a structurally refreshable token and clears it", () => {
+	it("recognizes flat and nested antigravity-oauth-token formats and clears credentials cleanly", () => {
 		const directory = root();
-		fs.writeFileSync(path.join(directory, "settings.json"), '{"auth":{"type":"oauth-personal"}}');
-		fs.writeFileSync(path.join(directory, "acp_token.json"), '{"refresh_token":"secret"}');
-		expect(inspectAntigravityAuth(directory).status).toBe("oauth-refreshable");
+		fs.writeFileSync(path.join(directory, "settings.json"), '{"auth":{"type":"oauth-personal"},"theme":"dark"}');
+		fs.writeFileSync(
+			path.join(directory, "antigravity-oauth-token"),
+			JSON.stringify({ token: { refresh_token: "nested-secret" }, auth_method: "oauth-personal" }),
+		);
+		fs.writeFileSync(path.join(directory, "acp_token.json"), '{"refresh_token":"legacy"}');
+		expect(inspectAntigravityAuth(directory)).toMatchObject({
+			status: "oauth-refreshable",
+			authType: "oauth-personal",
+			tokenFile: true,
+			settingsFile: true,
+		});
+
 		clearAntigravityCredentials(directory);
 		expect(inspectAntigravityAuth(directory).status).toBe("missing");
+		expect(fs.existsSync(path.join(directory, "antigravity-oauth-token"))).toBe(false);
+		expect(fs.existsSync(path.join(directory, "acp_token.json"))).toBe(false);
+		expect(JSON.parse(fs.readFileSync(path.join(directory, "settings.json"), "utf8"))).toEqual({ theme: "dark" });
+	});
+
+	it("recognizes flat refreshable tokens without settings.json using auth_method", () => {
+		const directory = root();
+		fs.writeFileSync(
+			path.join(directory, "antigravity-oauth-token"),
+			JSON.stringify({ refresh_token: "secret", auth_method: "oauth-business" }),
+		);
+		expect(inspectAntigravityAuth(directory)).toMatchObject({
+			status: "oauth-refreshable",
+			authType: "oauth-business",
+		});
 	});
 
 	it("reports corrupt token files", () => {
 		const directory = root();
-		fs.writeFileSync(path.join(directory, "acp_token.json"), "not-json");
+		fs.writeFileSync(path.join(directory, "antigravity-oauth-token"), "not-json");
 		expect(inspectAntigravityAuth(directory).status).toBe("corrupt");
 	});
 
 	it("follows an explicit GEMINI_HOME to the relocated token", () => {
 		const home = root();
-		const acp = path.join(home, "antigravity-acp");
-		fs.mkdirSync(acp, { recursive: true });
-		fs.writeFileSync(path.join(acp, "acp_token.json"), '{"refresh_token":"secret"}');
+		const cli = path.join(home, "antigravity-cli");
+		fs.mkdirSync(cli, { recursive: true });
+		fs.writeFileSync(path.join(cli, "antigravity-oauth-token"), '{"refresh_token":"secret"}');
 		const previous = process.env.GEMINI_HOME;
 		process.env.GEMINI_HOME = home;
 		try {
-			expect(resolveAntigravityAcpDirectory()).toBe(acp);
+			expect(resolveAntigravityAcpDirectory()).toBe(cli);
 			expect(inspectAntigravityAuth().status).toBe("oauth-refreshable");
 		} finally {
 			if (previous === undefined) delete process.env.GEMINI_HOME;
@@ -64,7 +89,7 @@ describe("Antigravity auth health", () => {
 		process.env.GEMINI_HOME = "  ";
 		try {
 			expect(resolveAntigravityAcpDirectory()).toBe(
-				path.join(os.homedir(), ".gemini", "antigravity-acp"),
+				path.join(os.homedir(), ".gemini", "antigravity-cli"),
 			);
 		} finally {
 			if (previous === undefined) delete process.env.GEMINI_HOME;
@@ -74,16 +99,16 @@ describe("Antigravity auth health", () => {
 
 	it("resolves the store from the environment it is given", () => {
 		expect(resolveAntigravityAcpDirectory({ HOME: "/child/home" })).toBe(
-			path.join("/child/home", ".gemini", "antigravity-acp"),
+			path.join("/child/home", ".gemini", "antigravity-cli"),
 		);
 		expect(resolveAntigravityAcpDirectory({ HOME: "/child/home", GEMINI_HOME: "/child/workspace" })).toBe(
-			path.join("/child/workspace", "antigravity-acp"),
+			path.join("/child/workspace", "antigravity-cli"),
 		);
 	});
 
 	it("reads the API key from the inspected environment only", () => {
 		const directory = root();
-		fs.writeFileSync(path.join(directory, "acp_token.json"), '{"refresh_token":"secret"}');
+		fs.writeFileSync(path.join(directory, "antigravity-oauth-token"), '{"refresh_token":"secret"}');
 		expect(inspectAntigravityAuth(directory, { GEMINI_API_KEY: "child-key" }).status).toBe("api-key-env");
 		expect(inspectAntigravityAuth(directory, {}).status).toBe("oauth-refreshable");
 	});

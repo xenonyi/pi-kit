@@ -7,36 +7,52 @@ import { AntigravityAcpError } from "./errors.js";
 export interface AntigravityLaunch {
 	command: string;
 	args: string[];
-	source: "env" | "user-bin" | "managed" | "path";
+	source: "env" | "user-bin" | "path";
 }
 
-export function resolveAntigravityAcpLaunch(): AntigravityLaunch {
+export interface ResolveLaunchOptions {
+	dangerSkipPermissions?: boolean;
+}
+
+export function isAgyCli(command: string): boolean {
+	return /^agy(?:\.(?:exe|cmd|bat))?$/iu.test(path.basename(command));
+}
+
+export function resolveAntigravityAcpLaunch(options: ResolveLaunchOptions = {}): AntigravityLaunch {
+	const extra = options.dangerSkipPermissions ? ["--dangerously-skip-permissions"] : [];
 	const env = process.env.AGY_ACP_BIN?.trim();
 	if (env) {
 		const command = expandHome(env);
-		if (executable(command)) return directOrWrapper(command, "env");
+		if (executable(command)) {
+			return {
+				command,
+				args: isAgyCli(command) ? ["acp", ...extra] : [],
+				source: "env",
+			};
+		}
 	}
 
-	// Prefer the provider's verified active release over ambient executables.
-	// AGY_ACP_BIN remains the explicit opt-out for user-managed installations.
-	const managedRoot = path.join(os.homedir(), ".local", "opt", "agy-acp", "current");
-	for (const name of ["agy_acp_server.par", "agy_acp_server.exe"]) {
-		const managed = path.join(managedRoot, name);
-		if (executable(managed)) return directOrWrapper(managed, "managed");
+	const names = process.platform === "win32" ? ["agy.exe", "agy.cmd", "agy.bat", "agy"] : ["agy"];
+	for (const name of names) {
+		const userBin = path.join(os.homedir(), ".local", "bin", name);
+		if (executable(userBin)) {
+			return { command: userBin, args: ["acp", ...extra], source: "user-bin" };
+		}
 	}
 
-	const userBin = path.join(os.homedir(), ".local", "bin", "agy_acp_server.par");
-	if (executable(userBin)) return { command: userBin, args: [], source: "user-bin" };
-
-	for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
+	for (const directory of (process.env.PATH ?? process.env.Path ?? "").split(path.delimiter)) {
 		if (!directory) continue;
-		const candidate = path.join(directory, "agy_acp_server.par");
-		if (executable(candidate)) return directOrWrapper(candidate, "path");
+		for (const name of names) {
+			const candidate = path.join(directory, name);
+			if (executable(candidate)) {
+				return { command: candidate, args: ["acp", ...extra], source: "path" };
+			}
+		}
 	}
 
 	throw new AntigravityAcpError(
 		"spawn",
-		"Google Antigravity ACP server is not installed. Install/enable agy ACP or set AGY_ACP_BIN.",
+		"Google Antigravity CLI (agy) is not installed. Install agy or set AGY_ACP_BIN.",
 	);
 }
 
@@ -54,44 +70,31 @@ export interface AntigravityAuthHealth {
 	settingsFile: boolean;
 }
 
-/** Resolves `<home>/antigravity-acp` for the given environment: `<home>` is
- * `$GEMINI_HOME` when set and non-empty, otherwise `<HOME>/.gemini`. The server
- * relocates its whole tree -- including `acp_token.json` -- under an explicit
- * `GEMINI_HOME` (an embedding host may set it per workspace), and a child
- * process can run with a different `HOME`/`GEMINI_HOME` than the one that
- * spawned it, so credential inspection must pass the child's environment. */
 export function resolveAntigravityAcpDirectory(env: NodeJS.ProcessEnv = process.env): string {
 	const home = effectiveHome(env);
 	const geminiHome = env.GEMINI_HOME?.trim();
 	const base = geminiHome ? expandHome(geminiHome, home) : path.join(home, ".gemini");
-	return path.join(base, "antigravity-acp");
+	return path.join(base, "antigravity-cli");
 }
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-/** Best-effort removal of the conversation store agy writes for one session:
- * `conversations/<id>.db`, `.db-shm`, `.db-wal` and `.meta`. Only for a session
- * this provider created and whose process has exited; any id that is not a
- * strict UUID is ignored so the path can never leave that directory. */
 export function removeConversation(sessionId: string, directory = resolveAntigravityAcpDirectory()): void {
 	if (!SESSION_ID.test(sessionId)) return;
 	for (const suffix of [".db", ".db-shm", ".db-wal", ".meta"]) {
 		try {
 			fs.rmSync(path.join(directory, "conversations", sessionId + suffix), { force: true });
 		} catch {
-			// Best effort: a locked or unexpected entry stays in place.
+			// Best effort.
 		}
 	}
 }
 
-/** Structural local health only. A network probe is required to call an OAuth
- * token valid; secret values are never returned or logged. `env` is the
- * environment whose credentials are inspected, not necessarily this process's. */
 export function inspectAntigravityAuth(
 	directory = resolveAntigravityAcpDirectory(),
 	env: NodeJS.ProcessEnv = process.env,
 ): AntigravityAuthHealth {
-	const tokenPath = path.join(directory, "acp_token.json");
+	const tokenPath = path.join(directory, "antigravity-oauth-token");
 	const settingsPath = path.join(directory, "settings.json");
 	const tokenFile = regularFile(tokenPath);
 	const settingsFile = regularFile(settingsPath);
@@ -109,9 +112,20 @@ export function inspectAntigravityAuth(
 	if (env.GEMINI_API_KEY) return { status: "api-key-env", authType: "gemini-api-key", tokenFile, settingsFile };
 	if (tokenFile) {
 		try {
-			const token = JSON.parse(fs.readFileSync(tokenPath, "utf8")) as { refresh_token?: unknown };
-			if (typeof token.refresh_token === "string" && token.refresh_token.length > 0) {
-				return { status: "oauth-refreshable", authType: authType ?? "oauth-personal", tokenFile, settingsFile };
+			const parsed = JSON.parse(fs.readFileSync(tokenPath, "utf8")) as {
+				refresh_token?: unknown;
+				auth_method?: unknown;
+				token?: { refresh_token?: unknown };
+			};
+			const refreshToken =
+				typeof parsed.token?.refresh_token === "string"
+					? parsed.token.refresh_token
+					: typeof parsed.refresh_token === "string"
+						? parsed.refresh_token
+						: undefined;
+			const method = typeof parsed.auth_method === "string" && parsed.auth_method ? parsed.auth_method : undefined;
+			if (refreshToken && refreshToken.length > 0) {
+				return { status: "oauth-refreshable", authType: authType ?? method ?? "oauth-personal", tokenFile, settingsFile };
 			}
 			return { status: "corrupt", ...(authType ? { authType } : {}), tokenFile, settingsFile };
 		} catch {
@@ -127,15 +141,16 @@ export function hasAntigravityAuth(): boolean {
 	return status === "api-key-env" || status === "oauth-refreshable";
 }
 
-/** Local logout. Google currently advertises logout as an agent command rather
- * than an ACP SDK RPC, so this removes the local refresh token and auth choice. */
 export function clearAntigravityCredentials(
 	directory = resolveAntigravityAcpDirectory(),
 ): void {
+	fs.rmSync(path.join(directory, "antigravity-oauth-token"), { force: true });
 	fs.rmSync(path.join(directory, "acp_token.json"), { force: true });
 	const settingsPath = path.join(directory, "settings.json");
+	if (!regularFile(settingsPath)) return;
 	try {
 		const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+		if (!settings || typeof settings !== "object" || !("auth" in settings)) return;
 		delete settings.auth;
 		const temporary = `${settingsPath}.${process.pid}.tmp`;
 		fs.writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
@@ -143,21 +158,6 @@ export function clearAntigravityCredentials(
 	} catch {
 		fs.rmSync(settingsPath, { force: true });
 	}
-}
-
-function directOrWrapper(command: string, source: AntigravityLaunch["source"]): AntigravityLaunch {
-	try {
-		const fd = fs.openSync(command, "r");
-		const bytes = Buffer.alloc(64);
-		const count = fs.readSync(fd, bytes, 0, bytes.length, 0);
-		fs.closeSync(fd);
-		if (bytes.subarray(0, count).toString("utf8").startsWith("#!")) {
-			return { command, args: [], source };
-		}
-	} catch {
-		// Native executable; use the server's required empty uid argument.
-	}
-	return { command, args: process.platform === "linux" ? ["--uid="] : [], source };
 }
 
 function executable(file: string): boolean {
@@ -177,7 +177,6 @@ function regularFile(file: string): boolean {
 	}
 }
 
-/** The home directory a child resolves `~` and the default store against. */
 function effectiveHome(env: NodeJS.ProcessEnv): string {
 	return env.HOME?.trim() || os.homedir();
 }

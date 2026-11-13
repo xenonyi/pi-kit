@@ -7,6 +7,7 @@ import {
 	DEFAULT_CONFIG_PATH,
 	LEGACY_GEMINI_CONFIG_PATH,
 	loadConfig,
+	normalizePermissionMode,
 	resolveConfigPath,
 	resolveConfigRoot,
 	resolvePiAgentDir,
@@ -28,14 +29,21 @@ afterEach(() => {
 });
 
 describe("permission configuration", () => {
-	it("defaults to yolo and persists an explicit safer mode", () => {
+	it("defaults to yolo and persists explicit modes", () => {
 		const directory = fs.mkdtempSync(path.join(os.tmpdir(), "antigravity-acp-config-"));
 		directories.push(directory);
 		const file = path.join(directory, "nested", "config.json");
 		expect(loadConfig(file)).toEqual({ permissions: "yolo", runtimeUpdates: "automatic" });
 		saveRuntimeUpdateMode("notify", file);
-		savePermissionMode("auto_edit", file);
-		expect(loadConfig(file)).toEqual({ permissions: "auto_edit", runtimeUpdates: "notify" });
+		savePermissionMode("accept-edits", file);
+		expect(loadConfig(file)).toEqual({ permissions: "accept-edits", runtimeUpdates: "notify" });
+		savePermissionMode("auto", file);
+		expect(loadConfig(file).permissions).toBe("auto");
+		savePermissionMode("plan", file);
+		expect(loadConfig(file).permissions).toBe("plan");
+		expect(normalizePermissionMode("auto_edit")).toBe("accept-edits");
+		expect(normalizePermissionMode("auto-edit")).toBe("accept-edits");
+		expect(normalizePermissionMode("unknown")).toBeUndefined();
 	});
 
 	it("resolves default agent directory and config paths when PI_CODING_AGENT_DIR is unset", () => {
@@ -87,7 +95,7 @@ describe("permission configuration", () => {
 		expect(resolvePiAgentDir()).toBe(defaultAgentDir);
 	});
 
-	it("migrates legacy gemini-acp-provider configuration from default agent directory", () => {
+	it("migrates legacy gemini-acp-provider configuration and normalizes legacy auto_edit", () => {
 		const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "fake-gemini-home-"));
 		directories.push(fakeHome);
 		vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
@@ -100,7 +108,7 @@ describe("permission configuration", () => {
 			JSON.stringify({ permissions: "auto_edit", runtimeUpdates: "manual" }),
 		);
 
-		expect(loadConfig()).toEqual({ permissions: "auto_edit", runtimeUpdates: "manual" });
+		expect(loadConfig()).toEqual({ permissions: "accept-edits", runtimeUpdates: "manual" });
 		const targetFile = path.join(fakeHome, ".pi", "agent", "antigravity-acp-provider", "config.json");
 		expect(fs.existsSync(targetFile)).toBe(true);
 	});
@@ -121,7 +129,7 @@ describe("permission configuration", () => {
 		directories.push(customAgentDir);
 		process.env.PI_CODING_AGENT_DIR = customAgentDir;
 
-		expect(loadConfig()).toEqual({ permissions: "auto_edit", runtimeUpdates: "notify" });
+		expect(loadConfig()).toEqual({ permissions: "accept-edits", runtimeUpdates: "notify" });
 		const targetFile = path.join(customAgentDir, "antigravity-acp-provider", "config.json");
 		expect(fs.existsSync(targetFile)).toBe(true);
 		expect(fs.readFileSync(path.join(defaultAntigravityDir, "config.json"), "utf8")).toBe(

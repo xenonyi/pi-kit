@@ -73,15 +73,26 @@ for await (const line of rl) {
 			id,
 			result: {
 				protocolVersion: 1,
-				agentInfo: { name: "fake-gemini", version: "1.0.0" },
-				authMethods: [
-					{ id: "oauth-personal", name: "Log in with Google" },
-					{ id: "api", name: "Gemini API key", _meta: { "api-key": { provider: "google" } } },
-				],
+				agentInfo:
+					scenario === "native-agy"
+						? { name: "Antigravity ACP Server", version: "1.5.8" }
+						: { name: "fake-gemini", version: "1.0.0" },
+				authMethods:
+					scenario === "native-agy"
+						? [
+								{ id: "oauth-personal", name: "OAuth Personal" },
+								{ id: "gemini-api-key", name: "Gemini API key" },
+							]
+						: [
+								{ id: "oauth-personal", name: "Log in with Google" },
+								{ id: "api", name: "Gemini API key", _meta: { "api-key": { provider: "google" } } },
+							],
 				agentCapabilities: {
 					loadSession: true,
 					promptCapabilities: { image: true, embeddedContext: true },
-					mcpCapabilities: { http: scenario !== "no-mcp" },
+					...(scenario === "native-agy"
+						? { auth: { logout: {} } }
+						: { mcpCapabilities: { http: scenario !== "no-mcp" } }),
 					sessionCapabilities: { resume: {} },
 				},
 			},
@@ -89,6 +100,8 @@ for await (const line of rl) {
 		if (scenario === "exit-after-initialize") {
 			setTimeout(() => process.exit(0), 10);
 		}
+	} else if (method === "logout") {
+		send({ jsonrpc: "2.0", id, result: {} });
 	} else if (method === "authenticate") {
 		if (scenario === "headless-auth") {
 			const state = "fake-oauth-state";
@@ -136,7 +149,7 @@ for await (const line of rl) {
 		}
 		// agy writes a conversation store per new session; opt-in, and only under an explicit GEMINI_HOME.
 		const conversations = process.env.FAKE_AGENT_CONVERSATIONS && process.env.GEMINI_HOME?.trim()
-			? path.join(process.env.GEMINI_HOME, "antigravity-acp", "conversations") : undefined;
+			? path.join(process.env.GEMINI_HOME, "antigravity-cli", "conversations") : undefined;
 		const sessionId = conversations && process.env.FAKE_AGENT_CONVERSATIONS === "uuid"
 			? randomUUID()
 			: scenario?.startsWith("recovery-")
@@ -386,6 +399,12 @@ for await (const line of rl) {
 
 function sessionModes(restored = false) {
 	if (scenario === "no-mode-metadata") return undefined;
+	if (scenario === "native-agy") {
+		return {
+			currentModeId: mode,
+			availableModes: ["default", "accept-edits", "auto", "plan"].map((id) => ({ id, name: id })),
+		};
+	}
 	const unavailable = scenario === "no-auto-edit-mode" ? "auto_edit"
 		: scenario === "no-default-mode" || (restored && scenario === "no-default-on-restore") ? "default" : undefined;
 	return { currentModeId: mode, availableModes: ["default", "auto_edit", "yolo"].filter((id) => id !== unavailable).map((id) => ({ id, name: id })) };

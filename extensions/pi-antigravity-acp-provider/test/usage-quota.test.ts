@@ -47,6 +47,30 @@ describe("parseUsageQuota", () => {
 		});
 	});
 
+	it("parses TSV output from agy -p /usage", () => {
+		const tsv = [
+			"Gemini Models\t5 Hour\t95%\t2026-01-08T04:30:00Z",
+			"Gemini Models\tWeekly\t80%\t2026-01-12T18:00:00Z",
+			"Claude Models\tWeekly\t100%\t",
+		].join("\n");
+		expect(parseUsageQuota(tsv, now)).toEqual({
+			at: now,
+			groups: [
+				{
+					displayName: "Gemini Models",
+					buckets: [
+						{ window: "5h", remainingFraction: 0.95, resetTime: "2026-01-08T04:30:00.000Z" },
+						{ window: "weekly", remainingFraction: 0.8, resetTime: "2026-01-12T18:00:00.000Z" },
+					],
+				},
+				{
+					displayName: "Claude Models",
+					buckets: [{ window: "weekly", remainingFraction: 1 }],
+				},
+			],
+		});
+	});
+
 	it("rejects replies without quota groups", () => {
 		expect(() => parseUsageQuota(unavailable("- Unable to retrieve quota status (backend unavailable)"), now))
 			.toThrow("Unable to retrieve quota status (backend unavailable)");

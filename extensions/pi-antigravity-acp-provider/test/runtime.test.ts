@@ -164,11 +164,38 @@ describe("AntigravityRuntime", () => {
 				},
 				{ sessionId: "pi-session", apiKey: "test-key" },
 			);
-			for await (const _event of second.stream) void _event;
+			const secondEvents = [];
+			for await (const event of second.stream) secondEvents.push(event);
+			const secondDone = secondEvents.at(-1);
+			if (secondDone?.type !== "done") throw new Error("missing second turn");
 			const switched = await runtime.snapshot();
 			expect(switched.processes[0]).toMatchObject({
-				generation: snapshot.processes[0]?.generation,
 				modelId: "auto",
+				confirmedPermissionMode: "default",
+			});
+			expect(switched.processes[0]?.generation).not.toBe(snapshot.processes[0]?.generation);
+
+			await runtime.setPermissionMode("accept-edits");
+			const third = runtime.stream(
+				model,
+				{
+					systemPrompt: "Be useful",
+					messages: [
+						...context.messages,
+						done.message,
+						{ role: "user", content: "second turn", timestamp: Date.now() },
+						secondDone.message,
+						{ role: "user", content: "third turn", timestamp: Date.now() + 1 },
+					],
+				},
+				{ sessionId: "pi-session", apiKey: "test-key" },
+			);
+			for await (const _event of third.stream) void _event;
+			const reused = await runtime.snapshot();
+			expect(reused.processes[0]).toMatchObject({
+				generation: switched.processes[0]?.generation,
+				modelId: "gemini-test",
+				confirmedPermissionMode: "accept-edits",
 			});
 		} finally {
 			await runtime.close();

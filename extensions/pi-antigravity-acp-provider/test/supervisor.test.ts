@@ -226,7 +226,7 @@ describe("applyDefaultTlsEnvironment", () => {
 		// login keychain, so a refreshable token file the keychain does not
 		// mirror would otherwise trigger interactive consent in every process.
 		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-credential-"));
-		const tokenPath = path.join(directory, "acp_token.json");
+		const tokenPath = path.join(directory, "antigravity-oauth-token");
 		await fs.writeFile(tokenPath, '{"refresh_token":"fixture"}');
 		const baseEnv: NodeJS.ProcessEnv = { ...process.env };
 		delete baseEnv.AGY_ACP_FORCE_FILE_STORAGE;
@@ -250,7 +250,7 @@ describe("applyDefaultTlsEnvironment", () => {
 
 	it("leaves the child credential backend untouched for a populated keychain", async () => {
 		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-credential-"));
-		const tokenPath = path.join(directory, "acp_token.json");
+		const tokenPath = path.join(directory, "antigravity-oauth-token");
 		await fs.writeFile(tokenPath, '{"refresh_token":"fixture"}');
 		const baseEnv: NodeJS.ProcessEnv = { ...process.env };
 		delete baseEnv.AGY_ACP_FORCE_FILE_STORAGE;
@@ -276,9 +276,9 @@ describe("applyDefaultTlsEnvironment", () => {
 		// The child can run with a store the launching process never sees; the
 		// decision must follow the environment the child actually receives.
 		const childHome = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-child-home-"));
-		const acpDirectory = path.join(childHome, "antigravity-acp");
-		await fs.mkdir(acpDirectory, { recursive: true });
-		await fs.writeFile(path.join(acpDirectory, "acp_token.json"), '{"refresh_token":"fixture"}');
+		const cliDirectory = path.join(childHome, "antigravity-cli");
+		await fs.mkdir(cliDirectory, { recursive: true });
+		await fs.writeFile(path.join(cliDirectory, "antigravity-oauth-token"), '{"refresh_token":"fixture"}');
 		const parentHome = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-parent-home-"));
 		vi.stubEnv("GEMINI_HOME", parentHome);
 		const baseEnv: NodeJS.ProcessEnv = { ...process.env, GEMINI_HOME: childHome };
@@ -434,6 +434,43 @@ describe("applyDefaultTlsEnvironment", () => {
 			Object.defineProperty(process, "execPath", { value: originalExecPath, configurable: true });
 			if (originalNode === undefined) delete process.env.NODE;
 			else process.env.NODE = originalNode;
+		}
+	});
+});
+
+describe.skipIf(process.platform === "win32")("agy launch arguments", () => {
+	it("passes acp, --dangerously-skip-permissions, and --gemini-dir when launching an agy binary with GEMINI_HOME", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-agy-args-"));
+		const agy = path.join(directory, "agy");
+		const geminiHome = path.join(directory, "gemini-home");
+		await fs.writeFile(
+			agy,
+			`#!${process.execPath}\nprocess.stderr.write(JSON.stringify(process.argv.slice(2)));\nprocess.exit(0);\n`,
+			{ mode: 0o755 },
+		);
+		vi.stubEnv("AGY_ACP_BIN", agy);
+		try {
+			const child = new AntigravityProcess({
+				cwd: process.cwd(),
+				dangerSkipPermissions: true,
+				env: { ...process.env, GEMINI_HOME: geminiHome },
+				credentialStorage: { platform: "linux" },
+			});
+			const exit = await Promise.race([
+				child.exited,
+				delay(2_000).then(() => {
+					throw new Error("fake agy did not exit");
+				}),
+			]);
+			expect(exit.code).toBe(0);
+			expect(JSON.parse(exit.stderrTail)).toEqual([
+				"acp",
+				"--dangerously-skip-permissions",
+				"--gemini-dir",
+				geminiHome,
+			]);
+		} finally {
+			await fs.rm(directory, { recursive: true, force: true });
 		}
 	});
 });

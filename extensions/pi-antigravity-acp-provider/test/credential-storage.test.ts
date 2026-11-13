@@ -24,7 +24,7 @@ function temporaryRoot(): string {
 }
 
 function tokenPathWith(content: string | undefined): string {
-	const tokenPath = path.join(temporaryRoot(), "acp_token.json");
+	const tokenPath = path.join(temporaryRoot(), "antigravity-oauth-token");
 	if (content !== undefined) fs.writeFileSync(tokenPath, content);
 	return tokenPath;
 }
@@ -32,13 +32,13 @@ function tokenPathWith(content: string | undefined): string {
 /** A relocated store home (`GEMINI_HOME` or `HOME`) with the server's token. */
 function homeWithToken(): string {
 	const home = temporaryRoot();
-	const directory = path.join(home, "antigravity-acp");
+	const directory = path.join(home, "antigravity-cli");
 	fs.mkdirSync(directory, { recursive: true });
-	fs.writeFileSync(path.join(directory, "acp_token.json"), refreshable);
+	fs.writeFileSync(path.join(directory, "antigravity-oauth-token"), refreshable);
 	return home;
 }
 
-const refreshable = '{"refresh_token":"fixture","client_id":"fixture"}';
+const refreshable = '{"token":{"refresh_token":"fixture"},"auth_method":"oauth-personal"}';
 
 describe("macOS credential storage selection", () => {
 	it("pins the server to the secure file when the keychain entry is absent", () => {
@@ -173,9 +173,9 @@ describe("child environment resolution", () => {
 	it("resolves the child's default store from the child HOME", () => {
 		vi.stubEnv("HOME", temporaryRoot());
 		const childHome = temporaryRoot();
-		const store = path.join(childHome, ".gemini", "antigravity-acp");
+		const store = path.join(childHome, ".gemini", "antigravity-cli");
 		fs.mkdirSync(store, { recursive: true });
-		fs.writeFileSync(path.join(store, "acp_token.json"), refreshable);
+		fs.writeFileSync(path.join(store, "antigravity-oauth-token"), refreshable);
 		const decision = resolveCredentialStorageDecision({
 			env: { HOME: childHome },
 			platform: "darwin",

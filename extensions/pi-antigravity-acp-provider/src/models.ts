@@ -9,7 +9,7 @@ export const PROVIDER_ID = "antigravity-acp";
 export const API_ID = "antigravity-acp";
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
-type Effort = "low" | "medium" | "high";
+type Effort = "low" | "medium" | "high" | "xhigh";
 type Variants = Partial<Record<Effort, string>>;
 
 // Keep the broadly available Flash model first for offline/default selection.
@@ -24,25 +24,28 @@ export const FALLBACK_MODELS: readonly Model<typeof API_ID>[] = [
 		medium: "gemini-4-argon-medium",
 		high: "gemini-4-argon-high",
 	}),
-	reasoningModel("gemini-3.7-flash", "Gemini 3.7 Flash", {
-		low: "gemini-3.7-flash-low",
-		medium: "gemini-3.7-flash-medium",
-		high: "gemini-3.7-flash-high",
+	reasoningModel("gemini-4-hydrogen", "Gemini 4 Hydrogen", {
+		low: "gemini-4-hydrogen-low",
+		medium: "gemini-4-hydrogen-medium",
+		high: "gemini-4-hydrogen-high",
+		xhigh: "gemini-4-hydrogen-xhigh",
 	}),
-	reasoningModel("gemini-3.6-flash", "Gemini 3.6 Flash", {
-		low: "gemini-3.6-flash-low",
-		medium: "gemini-3.6-flash-medium",
-		high: "gemini-3.6-flash-high",
+	fixedModel("gemini-pro-orchestrator-g1-pro", "Gemini Pro Orchestrator G1 Pro"),
+	reasoningModel("claude-opus-5-5", "Claude Opus 5.5", {
+		low: "claude-opus-5-5-low",
+		medium: "claude-opus-5-5-medium",
+		high: "claude-opus-5-5-high",
 	}),
-	reasoningModel("gemini-3.1-pro", "Gemini 3.1 Pro", {
-		low: "gemini-3.1-pro-low",
-		high: "gemini-pro-agent",
+	reasoningModel("claude-sonnet-5-5", "Claude Sonnet 5.5", {
+		low: "claude-sonnet-5-5-low",
+		medium: "claude-sonnet-5-5-medium",
+		high: "claude-sonnet-5-5-high",
+	}),
+	reasoningModel("gpt-oss-120b-medium", "GPT-OSS 120B (Medium)", {
+		medium: "gpt-oss-120b-medium",
 	}),
 ];
 
-/** Collapse Antigravity's effort-qualified ACP IDs into one Pi model. The
- * exact server IDs live in thinkingLevelMap, allowing Shift+Tab to select the
- * corresponding low/medium/high variant without cluttering /model. */
 export function projectModels(models: readonly AcpModelInfo[]): Model<typeof API_ID>[] {
 	const safe = models.filter((candidate) => validModelId(candidate.modelId.trim()));
 	const groups = new Map<
@@ -53,7 +56,7 @@ export function projectModels(models: readonly AcpModelInfo[]): Model<typeof API
 	for (const candidate of safe) {
 		const id = candidate.modelId.trim();
 		const parsed = effortFromName(candidate.name) ?? effortFromId(id);
-		if (!id.startsWith("gemini-") || !parsed) continue;
+		if (!parsed) continue;
 		const key = parsed.baseName.toLowerCase();
 		const group = groups.get(key) ?? { name: parsed.baseName, variants: {}, members: [] };
 		group.variants[parsed.effort] = id;
@@ -80,30 +83,23 @@ export function projectModels(models: readonly AcpModelInfo[]): Model<typeof API
 			continue;
 		}
 		emittedIds.add(id);
-		// A single advertised effort is still a reasoning model (for example
-		// Argon Medium during a rollout). Preserve its exact public/ACP ID and
-		// expose only that tier, rather than claiming thinking is unsupported or
-		// guessing additional variants which may not exist for this account.
-		projected.push(id.startsWith("gemini-") && parsed
-			? reasoningModel(id, candidate.name.trim() || id, { [parsed.effort]: id })
-			: fixedModel(id, candidate.name.trim() || id));
+		projected.push(
+			parsed
+				? reasoningModel(id, candidate.name.trim() || id, { [parsed.effort]: id })
+				: fixedModel(id, candidate.name.trim() || id),
+		);
 	}
 	return projected;
 }
 
-export type ModelEffort = "low" | "medium" | "high";
+export type ModelEffort = Effort;
 
-/** Antigravity advertises effort-qualified ids (`gemini-3.8-flash-high`) while the
- * server's `model` config option takes only the base id and keeps the tier on a
- * selector of its own, so a qualified id has to be split before it is sent. */
 export function splitEffortSuffix(modelId: string): { base: string; effort: ModelEffort } | undefined {
-	const match = /^(.*)-(low|medium|high)$/u.exec(modelId);
+	const match = /^(.*)-(low|medium|high|xhigh)$/u.exec(modelId);
 	if (!match?.[1]) return undefined;
 	return { base: match[1], effort: match[2] as ModelEffort };
 }
 
-/** Resolve Pi's current reasoning level to the exact model ID advertised by
- * Antigravity. Unsupported programmatic levels clamp to the nearest tier. */
 export function resolveAcpModelId(
 	model: Model<typeof API_ID>,
 	reasoning: ThinkingLevel | undefined,
@@ -113,15 +109,19 @@ export function resolveAcpModelId(
 	const preferred: Effort =
 		reasoning === "minimal" || reasoning === "low"
 			? "low"
-			: reasoning === "high" || reasoning === "xhigh" || reasoning === "max"
-				? "high"
-				: "medium";
+			: reasoning === "xhigh" || reasoning === "max"
+				? "xhigh"
+				: reasoning === "high"
+					? "high"
+					: "medium";
 	const order: Effort[] =
 		preferred === "low"
-			? ["low", "medium", "high"]
-			: preferred === "high"
-				? ["high", "medium", "low"]
-				: ["medium", "high", "low"];
+			? ["low", "medium", "high", "xhigh"]
+			: preferred === "xhigh"
+				? ["xhigh", "high", "medium", "low"]
+				: preferred === "high"
+					? ["high", "xhigh", "medium", "low"]
+					: ["medium", "high", "low", "xhigh"];
 	for (const effort of order) {
 		const value = map[effort];
 		if (typeof value === "string" && value) return value;
@@ -140,7 +140,7 @@ function reasoningModel(
 		low: variants.low ?? null,
 		medium: variants.medium ?? null,
 		high: variants.high ?? null,
-		xhigh: null,
+		xhigh: variants.xhigh ?? null,
 		max: null,
 	};
 	return baseModel(id, name, true, thinkingLevelMap);
@@ -172,7 +172,7 @@ function baseModel(
 }
 
 function effortFromName(name: string): { baseName: string; effort: Effort } | undefined {
-	const match = name.trim().match(/^(.+?)\s*\((low|medium|high)\)$/iu);
+	const match = name.trim().match(/^(.+?)\s*\((low|medium|high|xhigh)\)$/iu);
 	if (!match?.[1] || !match[2]) return undefined;
 	return { baseName: match[1].trim(), effort: match[2].toLowerCase() as Effort };
 }

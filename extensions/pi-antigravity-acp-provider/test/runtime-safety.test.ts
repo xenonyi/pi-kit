@@ -68,7 +68,7 @@ describe("permission policy and lifecycle", () => {
 	it.each(["no-auto-edit-mode", "set-mode-fails", "config-options-ignored-mode"])("closes sessions that cannot confirm a mode change: %s", async (scenario) => {
 		const { runtime, entries } = setup(scenario, "default");
 		const first = await turn(runtime, [user("hello")]); expect(first.stopReason).toBe("stop");
-		await runtime.setPermissionMode("auto_edit");
+		await runtime.setPermissionMode("accept-edits");
 		expect((await runtime.snapshot()).bindings).toBe(0);
 		const second = await turn(runtime, [user("hello"), first, user("next", 2)]);
 		expect(second.stopReason).toBe("error");
@@ -83,9 +83,9 @@ describe("permission policy and lifecycle", () => {
 	});
 
 	it("serializes competing mode changes on a modern server", async () => {
-		const { runtime } = setup("config-options");
+		const { runtime } = setup("config-options", "default");
 		await turn(runtime, [user("hello")]);
-		await Promise.all([runtime.setPermissionMode("auto_edit"), runtime.setPermissionMode("default")]);
+		await Promise.all([runtime.setPermissionMode("accept-edits"), runtime.setPermissionMode("default")]);
 		expect((await runtime.snapshot()).processes[0]?.confirmedPermissionMode).toBe("default");
 	});
 
@@ -583,16 +583,16 @@ describe("live quota", () => {
 describe("throwaway conversations", () => {
 	const userSid = "0f8fad5b-d9cb-469f-a165-70867728950e";
 	function conversationsIn(root: string, sids: "uuid" | "plain" = "uuid") {
-		const acp = path.join(root, "gemini", "antigravity-acp");
-		const conversations = path.join(acp, "conversations");
+		const cliDir = path.join(root, "gemini", "antigravity-cli");
+		const conversations = path.join(cliDir, "conversations");
 		fs.mkdirSync(conversations, { recursive: true });
 		for (const suffix of [".db", ".db-shm", ".db-wal", ".meta"]) fs.writeFileSync(path.join(conversations, userSid + suffix), "user");
-		fs.writeFileSync(path.join(acp, "acp_token.json"), "{}");
+		fs.writeFileSync(path.join(cliDir, "antigravity-oauth-token"), "{}");
 		vi.stubEnv("GEMINI_HOME", path.join(root, "gemini"));
 		vi.stubEnv("FAKE_AGENT_CONVERSATIONS", sids);
 		return {
 			files: () => fs.readdirSync(conversations).sort(),
-			token: () => fs.existsSync(path.join(acp, "acp_token.json")),
+			token: () => fs.existsSync(path.join(cliDir, "antigravity-oauth-token")),
 		};
 	}
 	const userFiles = [".db", ".db-shm", ".db-wal", ".meta"].map((suffix) => userSid + suffix).sort();
@@ -626,3 +626,100 @@ describe("throwaway conversations", () => {
 		expect(store.files()).toEqual([...userFiles, "fake-session.db", "fake-session.db-shm", "fake-session.db-wal", "fake-session.meta"].sort());
 	});
 });
+
+describe("native agy 1.5.x compatibility", () => {
+	function setupNative(mode: PermissionMode = "yolo") {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-native-agy-"));
+		roots.push(root);
+		const log = path.join(root, "calls.jsonl");
+		fs.writeFileSync(log, "");
+		const connections: AntigravityAcpConnection[] = [];
+		const dangerFlags: Array<boolean | undefined> = [];
+		const runtime = new AntigravityRuntime((options) => {
+			dangerFlags.push(options.dangerSkipPermissions);
+			const connection = new AntigravityAcpConnection({
+				...options,
+				command: process.execPath,
+				args: [fakeAgent, "native-agy"],
+				env: { ...process.env, FAKE_AGENT_LOG_FILE: log },
+			});
+			connections.push(connection);
+			return connection;
+		}, mode);
+		runtimes.push(runtime);
+		const entries = () =>
+			fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { method: string; modeId?: string });
+		return { root, runtime, connections, dangerFlags, entries };
+	}
+
+	afterEach(() => { vi.unstubAllEnvs(); });
+
+	it("enables PiMcpBridge for Antigravity ACP Server even when mcpCapabilities is omitted", async () => {
+		const { runtime } = setupNative("yolo");
+		const first = await drain(
+			runtime.stream(model, { tools, messages: [user("use bridge")] }, { sessionId: "native-mcp", apiKey: "test-key" }),
+		);
+		expect(first.stopReason).toBe("toolUse");
+		const call = first.content.find((block) => block.type === "toolCall");
+		if (call?.type !== "toolCall") throw new Error("missing bridge tool call");
+		const second = await drain(
+			runtime.stream(
+				model,
+				{
+					tools,
+					messages: [
+						user("use bridge"),
+						first,
+						{
+							role: "toolResult",
+							toolCallId: call.id,
+							toolName: call.name,
+							content: [{ type: "text", text: "ok" }],
+							isError: false,
+							timestamp: 2,
+						},
+					],
+				},
+				{ sessionId: "native-mcp", apiKey: "test-key" },
+			),
+		);
+		expect(second.stopReason).toBe("stop");
+		expect((await runtime.snapshot()).processes[0]?.mcpHttp).toBe(true);
+	});
+
+	it("maps yolo to auto with dangerSkipPermissions and invalidates processes across yolo boundary switches", async () => {
+		const { runtime, dangerFlags, entries } = setupNative("yolo");
+		const first = await turn(runtime, [user("hello")], "mode-boundary");
+		expect(first.stopReason).toBe("stop");
+		expect(dangerFlags).toEqual([true]);
+		expect(entries().filter((entry) => entry.method === "session/set_mode").map((entry) => entry.modeId)).toEqual(["auto"]);
+		expect((await runtime.snapshot()).processes[0]?.confirmedPermissionMode).toBe("yolo");
+
+		await runtime.setPermissionMode("accept-edits");
+		expect((await runtime.snapshot()).bindings).toBe(0);
+
+		const second = await turn(runtime, [user("hello"), first, user("next", 2)], "mode-boundary");
+		expect(second.stopReason).toBe("stop");
+		expect(dangerFlags).toEqual([true, false]);
+		expect((await runtime.snapshot()).processes[0]?.confirmedPermissionMode).toBe("accept-edits");
+
+		await runtime.setPermissionMode("plan");
+		expect((await runtime.snapshot()).bindings).toBe(1);
+		expect((await runtime.snapshot()).processes[0]?.confirmedPermissionMode).toBe("plan");
+		expect(entries().filter((entry) => entry.method === "session/set_mode").map((entry) => entry.modeId)).toEqual([
+			"auto",
+			"accept-edits",
+			"plan",
+		]);
+	});
+
+	it("invokes the ACP logout RPC on live connections before closing bindings", async () => {
+		const { root, runtime, entries } = setupNative("default");
+		vi.stubEnv("GEMINI_HOME", path.join(root, "gemini"));
+		await turn(runtime, [user("hello")], "logout-rpc");
+		await runtime.logout();
+		expect(entries().some((entry) => entry.method === "logout")).toBe(true);
+		expect((await runtime.snapshot()).bindings).toBe(0);
+	});
+});
+
