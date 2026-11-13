@@ -15,6 +15,7 @@ pnpm tsc         # 类型检查
 
 | 扩展 | 说明 | 文档 |
 | --- | --- | --- |
+| `pi-antigravity-acp-provider` | Google Antigravity ACP provider（含错误恢复、预热、长会话滚动与配额复用优化） | [README](./extensions/pi-antigravity-acp-provider/README.md) |
 | `pi-ask-user-question` | `ask_user_question` 工具：向用户提一个阻塞问题（自由文本、单选、多选），只在 TUI 会话里声明 | [README](./extensions/pi-ask-user-question/README.md) |
 | `pi-btw` | `/btw` 命令：旁支提问不污染会话历史，答案只出现在临时面板，只在 TUI 会话里注册 | [README](./extensions/pi-btw/README.md) |
 | `pi-herdr` | 把 herdr-app 窗口与 `hc` 的常用操作固化成 `herdr_*` 工具和 `/herdr` 命令，默认不加载 | [README](./extensions/pi-herdr/README.md) |
